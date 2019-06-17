@@ -38,6 +38,9 @@ pub struct PushPull;
 /// Open drain output (type state)
 pub struct OpenDrain;
 
+/// Analog mode (type state)
+pub struct Analog;
+
 /// Alternate mode (type state)
 pub struct Alternate<AF, MODE>
 {
@@ -114,7 +117,7 @@ macro_rules! gpio {
                 Alternate,
                 AF1, AF4, AF5, AF6, AF7, AF8, AF9, AF10,
                 Floating, GpioExt, Input, OpenDrain, Output,
-                PullDown, PullUp, PushPull, State,
+                PullDown, PullUp, PushPull, Analog, State,
             };
 
             /// GPIO parts
@@ -575,6 +578,28 @@ macro_rules! gpio {
                     ) -> $PXi<Alternate<AF9, Output<PushPull>>> {
                         let od = self.into_push_pull_output(moder, otyper);
                         od.into_af9(moder, afr)
+                    }
+
+                     /// Configures the pin to operate as an analog input pin
+                    pub fn into_analog(
+                        self,
+                        afr: &mut $AFR
+                    ) -> $PXi<Analog> {
+                        let offset = (4 * $i) % 32;
+                        // Analog input
+                        let cnf = 0b00;
+                        // Input mode
+                        let mode = 0b00;
+                        let bits = (cnf << 2) | mode;
+
+                        // analog mode
+                        cr
+                            .cr()
+                            .modify(|r, w| unsafe {
+                                w.bits((r.bits() & !(0b1111 << offset)) | (bits << offset))
+                            });
+
+                        $PXi { _mode: PhantomData }
                     }
                 }
 
