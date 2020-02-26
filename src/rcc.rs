@@ -1,12 +1,8 @@
 //! Reset and Clock Control
 
-use core::cmp;
-
-use cast::u32;
 use crate::stm32::{rcc, RCC};
-
+use ticklock::clock::{Frequency, U32Ext};
 use crate::flash::ACR;
-use crate::time::Hertz;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MsiFreq {
@@ -253,27 +249,26 @@ impl APB2 {
     }
 }
 
-const HSI: u32 = 16_000_000; // Hz
+/// Frequency in mhz
+const HSI: u32 = 16;
 
 /// Clock configuration
 pub struct CFGR {
-    hclk: Option<u32>,
+    hclk: Option<Frequency>,
     hsi48: bool,
     msi: Option<MsiFreq>,
     lsi: bool,
-    pclk1: Option<u32>,
-    pclk2: Option<u32>,
-    sysclk: Option<u32>,
+    pclk1: Option<Frequency>,
+    pclk2: Option<Frequency>,
+    sysclk: Option<Frequency>,
     pllcfg: Option<PllConfig>
 }
 
 impl CFGR {
     /// Sets a frequency for the AHB bus
-    pub fn hclk<F>(mut self, freq: F) -> Self
-    where
-        F: Into<Hertz>,
+    pub fn hclk(mut self, freq: Frequency) -> Self
     {
-        self.hclk = Some(freq.into().0);
+        self.hclk = Some(freq);
         self
     }
 
@@ -298,39 +293,31 @@ impl CFGR {
     }
 
     /// Sets a frequency for the APB1 bus
-    pub fn pclk1<F>(mut self, freq: F) -> Self
-    where
-        F: Into<Hertz>,
+    pub fn pclk1(mut self, freq: Frequency) -> Self
     {
-        self.pclk1 = Some(freq.into().0);
+        self.pclk1 = Some(freq);
         self
     }
 
     /// Sets a frequency for the APB2 bus
-    pub fn pclk2<F>(mut self, freq: F) -> Self
-    where
-        F: Into<Hertz>,
+    pub fn pclk2(mut self, freq: Frequency) -> Self
     {
-        self.pclk2 = Some(freq.into().0);
+        self.pclk2 = Some(freq);
         self
     }
 
     /// Sets the system (core) frequency
-    pub fn sysclk<F>(mut self, freq: F) -> Self
-    where
-        F: Into<Hertz>,
+    pub fn sysclk(mut self, freq: Frequency) -> Self
     {
-        self.sysclk = Some(freq.into().0);
+        self.sysclk = Some(freq);
         self
     }
 
     /// Sets the system (core) frequency with some pll configuration
-    pub fn sysclk_with_pll<F>(mut self, freq: F, cfg: PllConfig) -> Self
-    where
-        F: Into<Hertz>,
+    pub fn sysclk_with_pll(mut self, freq: Frequency, cfg: PllConfig) -> Self
     {
         self.pllcfg = Some(cfg);
-        self.sysclk = Some(freq.into().0);
+        self.sysclk = Some(freq);
         self
     }
 
@@ -338,8 +325,8 @@ impl CFGR {
     pub fn freeze(&self, acr: &mut ACR) -> Clocks {
 
         let pllconf = if self.pllcfg.is_none() {
-            let plln = (2 * self.sysclk.unwrap_or(HSI)) / HSI;
-            let plln = cmp::min(cmp::max(plln, 2), 16);
+            let plln = (2 * self.sysclk.unwrap_or(HSI.mhz())) / HSI.mhz();
+            let plln = U32Ext::clamp(plln, 2, 16);
             if plln == 2 {
                 None
             } else {
@@ -358,9 +345,9 @@ impl CFGR {
             Some(conf)
         };
 
-        let sysclk = self.sysclk.unwrap_or(HSI);
+        let sysclk = self.sysclk.unwrap_or(HSI.mhz());
 
-        assert!(sysclk <= 80_000_000);
+        assert!(sysclk <= 80.mhz());
 
         let (hpre_bits, hpre_div) = self.hclk
             .map(|hclk| match sysclk / hclk {
@@ -394,7 +381,7 @@ impl CFGR {
             })
             .unwrap_or((0b000, 1));
 
-        let pclk1 = hclk / u32(ppre1);
+        let pclk1 = hclk / ppre1;
 
         assert!(pclk1 <= sysclk);
 
@@ -410,16 +397,16 @@ impl CFGR {
             })
             .unwrap_or((0b000, 1));
 
-        let pclk2 = hclk / u32(ppre2);
+        let pclk2 = hclk / ppre2;
 
         assert!(pclk2 <= sysclk);
 
         // adjust flash wait states
         unsafe {
             acr.acr().write(|w| {
-                w.latency().bits(if sysclk <= 24_000_000 {
+                w.latency().bits(if sysclk <= 24.mhz() {
                     0b000
-                } else if sysclk <= 48_000_000 {
+                } else if sysclk <= 48.mhz() {
                     0b001
                 } else {
                     0b010
@@ -511,21 +498,20 @@ impl CFGR {
         }
 
         // Select MSI as clock source for usb48, rng ...
-        if let Some(MsiFreq::RANGE48M) = self.msi {
-            unsafe { rcc.ccipr.modify(|_, w| w.clk48sel().bits(0b11)) };
+        // Only if hsi48 is running.
+        if let (Some(MsiFreq::RANGE48M), false) = (self.msi, self.hsi48) {
+            unsafe { rcc.ccipr.modify(|_, w| w.clk48sel().bits(MsiFreq::RANGE48M as u8)) };
         }
         //TODO proper clk48sel and other selects
 
         Clocks {
-            hclk: Hertz(hclk),
+            hclk: hclk,
             lsi: self.lsi,
             msi: self.msi,
             hsi48: self.hsi48,
-            pclk1: Hertz(pclk1),
-            pclk2: Hertz(pclk2),
-            ppre1: ppre1,
-            ppre2: ppre2,
-            sysclk: Hertz(sysclk),
+            pclk1: pclk1,
+            pclk2: pclk2,
+            sysclk: sysclk,
         }
     }
 
@@ -547,22 +533,18 @@ pub struct PllConfig {
 /// The existence of this value indicates that the clock configuration can no longer be changed
 #[derive(Clone, Copy, Debug)]
 pub struct Clocks {
-    hclk: Hertz,
+    hclk: Frequency,
     hsi48: bool,
     msi: Option<MsiFreq>,
     lsi: bool,
-    pclk1: Hertz,
-    pclk2: Hertz,
-    // TODO remove `allow`
-    #[allow(dead_code)]
-    ppre1: u8,
-    ppre2: u8,
-    sysclk: Hertz,
+    pclk1: Frequency,
+    pclk2: Frequency,
+    sysclk: Frequency,
 }
 
 impl Clocks {
     /// Returns the frequency of the AHB
-    pub fn hclk(&self) -> Hertz {
+    pub fn hclk(&self) -> Frequency {
         self.hclk
     }
 
@@ -582,28 +564,25 @@ impl Clocks {
     }
 
     /// Returns the frequency of the APB1
-    pub fn pclk1(&self) -> Hertz {
+    pub fn pclk1(&self) -> Frequency {
         self.pclk1
     }
 
     /// Returns the frequency of the APB2
-    pub fn pclk2(&self) -> Hertz {
+    pub fn pclk2(&self) -> Frequency {
         self.pclk2
     }
 
-    // TODO remove `allow`
-    #[allow(dead_code)]
-    pub(crate) fn ppre1(&self) -> u8 {
-        self.ppre1
-    }
-    // TODO remove `allow`
-    #[allow(dead_code)]
-    pub(crate) fn ppre2(&self) -> u8 {
-        self.ppre2
+    /// Returns the system (core) frequency
+    pub fn sysclk(&self) -> Frequency {
+        self.sysclk
     }
 
-    /// Returns the system (core) frequency
-    pub fn sysclk(&self) -> Hertz {
-        self.sysclk
+    pub fn is_pclk1_pre(&self) -> bool {
+        self.sysclk > self.pclk1
+    }
+
+    pub fn is_pclk2_pre(&self) -> bool {
+        self.sysclk > self.pclk2
     }
 }

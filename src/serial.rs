@@ -8,6 +8,7 @@ use core::ops::DerefMut;
 use core::ptr;
 use core::sync::atomic::{self, Ordering};
 use stable_deref_trait::StableDeref;
+use ticklock::clock::U32Ext;
 
 use crate::hal::serial::{self, Write};
 use nb;
@@ -56,7 +57,7 @@ use crate::gpio::AF8;
 
 use crate::dma::{dma1, CircBuffer};
 use crate::rcc::{Clocks, APB1R1, APB2};
-use crate::time::{Bps, U32Ext};
+use crate::time::Bps;
 
 #[cfg(any(feature = "stm32l4x5", feature = "stm32l4x6",))]
 use crate::dma::dma2;
@@ -390,7 +391,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let baudrate = 115_200_u32.bps();
+        let baudrate = Bps(115_200_u32);
         Config {
             baudrate,
             parity: Parity::ParityNone,
@@ -473,8 +474,7 @@ macro_rules! hal {
                     // Enable One bit sampling method
                     usart.cr3.write(|w| w.onebit().set_bit());
 
-                    // Configure baud rate
-                    let brr = clocks.$pclkX().0 / config.baudrate.0;
+                    let brr = clocks.$pclkX() / config.baudrate.0.hz();
                     assert!(brr >= 16, "impossible baud rate");
                     usart.brr.write(|w| unsafe { w.bits(brr) });
 

@@ -7,7 +7,6 @@ pub use crate::rcc::RccExt as _stm32l4_hal_RccExt;
 pub use crate::flash::FlashExt as _stm32l4_hal_FlashExt;
 pub use crate::gpio::GpioExt as _stm32l4_hal_GpioExt;
 pub use crate::gpio::ExtiPin as _stm32l4_hal_ExtiPin;
-pub use crate::time::U32Ext as _stm32l4_hal_time_U32Ext;
 pub use crate::datetime::U32Ext as _stm32l4_hal_datetime_U32Ext;
 pub use crate::dma::DmaExt as _stm32l4_hal_DmaExt;
 pub use crate::pwr::PwrExt as _stm32l4_hal_PwrExt;
