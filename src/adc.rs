@@ -6,7 +6,12 @@ use crate::rcc::{AHB2, CCIPR};
 // use core::marker::PhantomData;
 use embedded_hal::adc::{Channel, OneShot};
 use crate::pac::{ADC1, ADC3, ADC2};
+use core::ptr;
 
+const VREFCAL: *const u16 = 0x1FFF_F7AA as *const u16;
+const VTEMPCAL30: *const u16 = 0x1FFF_F7A8 as *const u16;
+const VTEMPCAL110: *const u16 = 0x1FFF_F7CA as *const u16;
+const VDD_CALIB: u16 = 3000;
 
 /// ADC Result Alignment
 #[derive(PartialEq)]
@@ -295,6 +300,9 @@ where
         self.adc
             .sqr1
             .modify(|_, w| unsafe { w.sq1().bits(PIN::channel()) });
+        self.adc
+            .sqr1
+            .modify(|_, w| unsafe { w.l3().bits(0b0000)});
         
         self.adc.isr.modify(|_, w| w.eoc().set_bit());
         self.adc.cr.modify(|_, w| w.adstart().set_bit());
@@ -366,6 +374,11 @@ macro_rules! int_adc {
                     let adc_common = unsafe { &*crate::device::ADC123_COMMON::ptr() };
                     adc_common.ccr.modify(|_, w| w.$en().clear_bit());
                 }
+
+                pub fn is_enabled(&mut self) -> bool {
+                    let adc_common = unsafe { &*crate::device::ADC123_COMMON::ptr() };
+                    adc_common.ccr.read().$en().bit_is_set()
+                }
             }
         )+
     };
@@ -427,7 +440,7 @@ adc_pins! {
     ADC1: (VBat: (VBat, 18_u8, smpr2)),
 }
 
-//Special case for VRef
+//Special case Setup for VRef
 impl Channel<Adc<ADC1>> for VRef {
     type ID = u8;
 
@@ -436,5 +449,79 @@ impl Channel<Adc<ADC1>> for VRef {
 impl AdcChannel <ADC1> for VRef {
     fn setup(&mut self, adc: &mut ADC1, sample_time : SampleTime) {
         // adc.rb.sqr5.write(|w| unsafe { w.sq1().bits($chan) });
+    }
+}
+
+
+impl VTemp{
+    fn convert_temp(vtemp: u16, vdda: u16) -> i16 {
+        let vtemp30_cal = i32::from(unsafe { ptr::read(VTEMPCAL30) }) * 100;
+        let vtemp110_cal = i32::from(unsafe { ptr::read(VTEMPCAL110) }) * 100;
+
+        let mut temperature = i32::from(vtemp) * 100;
+        temperature = (temperature * (i32::from(vdda) / i32::from(VDD_CALIB))) - vtemp30_cal;
+        temperature *= (110 - 30) * 100;
+        temperature /= vtemp110_cal - vtemp30_cal;
+        temperature += 3000;
+        temperature as i16
+    }
+
+    /// Read the value of the internal temperature sensor and return the
+    /// result in 100ths of a degree centigrade.
+    ///
+    /// Given a delay reference it will attempt to restrict to the
+    /// minimum delay needed to ensure a 10 us t<sub>START</sub> value.
+    /// Otherwise it will approximate the required delay using ADC reads.
+    //Presumes ADC is setup for reciving a single measurement
+    pub fn read(adc: &mut Adc<ADC1>) -> i16 {
+        let mut vtemp = Self::new();
+        let vtemp_preenable = vtemp.is_enabled();
+
+        if !vtemp_preenable {
+            vtemp.enable();
+            //Delay set for worst case senario for STM32L475
+            cortex_m::asm::delay(1_000);
+            
+        }
+
+        let vdda = VRef::read_vdda(adc);
+
+        // let prev_cfg = adc.default_cfg();
+
+        let vtemp_val = adc.read(&mut vtemp).unwrap();
+
+        if !vtemp_preenable {
+            vtemp.disable();
+        }
+
+        // adc.restore_cfg(prev_cfg);
+
+        Self::convert_temp(vtemp_val, vdda)
+    }
+}
+
+
+impl VRef {
+    /// Reads the value of VDDA in milli-volts
+    pub fn read_vdda(adc: &mut Adc<ADC1>) -> u16 {
+        let vrefint_cal = u32::from(unsafe { ptr::read(VREFCAL) });
+        let mut vref = Self::new();
+
+        // let prev_cfg = adc.default_cfg();
+
+        let vref_val: u32 = if vref.is_enabled() {
+            adc.read(&mut vref).unwrap()
+        } else {
+            vref.enable();
+
+            let ret = adc.read(&mut vref).unwrap();
+
+            vref.disable();
+            ret
+        };
+
+        // adc.restore_cfg(prev_cfg);
+
+        (u32::from(VDD_CALIB) * vrefint_cal / vref_val) as u16
     }
 }
