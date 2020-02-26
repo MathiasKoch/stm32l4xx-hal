@@ -3,7 +3,6 @@ use crate::gpio::gpioc;
 use crate::gpio::gpiob;
 use crate::gpio::{Analog, Input};
 use crate::rcc::{AHB2, CCIPR};
-// use core::marker::PhantomData;
 use embedded_hal::adc::{Channel, OneShot};
 use crate::pac::{ADC1, ADC3, ADC2};
 use core::ptr;
@@ -14,7 +13,7 @@ const VTEMPCAL110: *const u16 = 0x1FFF_F7CA as *const u16;
 const VDD_CALIB: u16 = 3000;
 
 /// ADC Result Alignment
-#[derive(PartialEq)]
+#[derive(Copy, Clone, PartialEq)]
 // #[repr(bool)]
 pub enum Align {
     /// Right aligned results (least significant bits)
@@ -31,21 +30,21 @@ pub enum Align {
 }
 
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub enum RegularOversampling{
     On = 0b1,
     Off = 0b0
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub enum InjectedOversampling{
     On = 0b1,
     Off = 0b0
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u16)]
 pub enum OversamplingRatio{
    /// 2x ADC Oversampling ratio
@@ -67,8 +66,8 @@ pub enum OversamplingRatio{
 }
 
 
-/// 
-#[derive(Copy, Clone, PartialEq)]
+///
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u16)]
 pub enum OversamplingShift{
     /// 0 bit Oversampling shift. Same as divide by 0
@@ -85,7 +84,7 @@ pub enum OversamplingShift{
    S5 = 0b0101,
    /// 6 bits Oversampling shift. Same as divide by 64
    S6 = 0b0110,
-   /// 7 bits Oversampling shift. Same as divide by 128 
+   /// 7 bits Oversampling shift. Same as divide by 128
    S7 = 0b0111,
    /// 8 bits Oversampling shift. Same as divide by 256
    S8 = 0b1000,
@@ -94,7 +93,7 @@ pub enum OversamplingShift{
 
 
 /// ADC Sampling Resolution
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub enum Resolution {
     /// 12 bit Resolution
@@ -108,7 +107,7 @@ pub enum Resolution {
 }
 
 /// ADC Sampling time
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u16)]
 pub enum SampleTime {
     /// 2.5 ADC clock cycles
@@ -129,6 +128,7 @@ pub enum SampleTime {
     T640_5 = 0b111,
 }
 
+#[derive(Copy, Clone, PartialEq)]
 pub struct Config {
     pub align: Align,
     pub resolution: Resolution,
@@ -191,15 +191,14 @@ impl Default for Config {
 
 pub struct Adc<ADC1> {
     adc: ADC1,
-    // config : Config,
-    sample_time:SampleTime,
+    config : Config,
 }
 
 #[cfg(feature = "stm32l4x5")]
 impl Adc<ADC1> {
     pub fn adc1(adc: ADC1, config : Config, ahb2 : &mut AHB2, ccipr : &mut CCIPR) -> Self {
-        
-        // Select system clock as clock for ADC        
+
+        // Select system clock as clock for ADC
         ccipr.ccipr().modify(|_, w|unsafe { w.adcsel().bits(0b11) } );
         // 00: No clock selected
         // 01: PLLSAI1 “R” clock (PLLADC1CLK) selected as ADCs clock
@@ -221,18 +220,12 @@ impl Adc<ADC1> {
         adc.cr.modify(|_, w| w.adcal().set_bit());
 
         while adc.cr.read().adcal().bit_is_set() {}
-        
+        let temp_c = Config::default();
         let mut adc = Self{
             adc,
-            // config,
-            sample_time: config.sample_time,
+            config: temp_c,
         };
-        adc.set_align(config.align);
-        adc.set_injected_oversampling(config.inj_oversampl);
-        adc.set_oversampling_ratio(config.oversampl_ratio);
-        adc.set_oversampling_shift(config.oversampl_shift);
-        adc.set_regular_oversampling(config.reg_oversampl);
-        adc.set_resolution(config.resolution);
+        adc.apply_config(config);
         adc
     }
 
@@ -247,6 +240,34 @@ impl Adc<ADC1> {
         self.adc.isr.modify(|_, w| w.adrdy().set_bit());
         while self.adc.cr.read().aden().bit_is_set() {}
     }
+
+    /// Apply a configuration to the ADC
+    pub fn apply_config(&mut self, config : Config){
+        self.set_align(config.align);
+        self.set_injected_oversampling(config.inj_oversampl);
+        self.set_oversampling_ratio(config.oversampl_ratio);
+        self.set_oversampling_shift(config.oversampl_shift);
+        self.set_regular_oversampling(config.reg_oversampl);
+        self.set_resolution(config.resolution);
+        self.config = config;
+    }
+
+    /// Resets the ADC config to default, returning the existing config as
+    /// a stored config.
+    pub fn default_config(&mut self) -> Config {
+        let cfg = self.get_config();
+        if !(cfg == Config::default()){
+            self.apply_config(Config::default());
+        }
+        cfg
+    }
+
+    /// Returns a copy of the current configuration
+    pub fn get_config(&mut self) -> Config{
+        self.config
+    }
+
+
 
     pub fn set_align(&mut self, align: Align) {
         self.adc.cfgr.modify(|_, w| w.align().bit(align == Align::Left))
@@ -287,10 +308,10 @@ where
 
     fn read(&mut self, pin: &mut PIN) -> nb::Result<WORD, Self::Error> {
         self.power_up();
-        
 
-        pin.setup(&mut self.adc, self.sample_time);
-        
+
+        pin.setup(&mut self.adc, self.config.sample_time);
+
         self.adc
             .cfgr
             .modify(|_, w| w.cont().clear_bit());
@@ -303,7 +324,7 @@ where
         self.adc
             .sqr1
             .modify(|_, w| unsafe { w.l3().bits(0b0000)});
-        
+
         self.adc.isr.modify(|_, w| w.eoc().set_bit());
         self.adc.cr.modify(|_, w| w.adstart().set_bit());
 
@@ -363,7 +384,7 @@ macro_rules! int_adc {
                 pub fn new() -> Self {
                     Self {}
                 }
-                
+
 
                 pub fn enable(&mut self) {
                     let adc_common = unsafe { &*crate::device::ADC123_COMMON::ptr() };
@@ -481,12 +502,12 @@ impl VTemp{
             vtemp.enable();
             //Delay set for worst case senario for STM32L475
             cortex_m::asm::delay(1_000);
-            
+
         }
 
         let vdda = VRef::read_vdda(adc);
 
-        // let prev_cfg = adc.default_cfg();
+        let prev_cfg = adc.default_config();
 
         let vtemp_val = adc.read(&mut vtemp).unwrap();
 
@@ -494,7 +515,7 @@ impl VTemp{
             vtemp.disable();
         }
 
-        // adc.restore_cfg(prev_cfg);
+        adc.apply_config(prev_cfg);
 
         Self::convert_temp(vtemp_val, vdda)
     }
@@ -507,7 +528,7 @@ impl VRef {
         let vrefint_cal = u32::from(unsafe { ptr::read(VREFCAL) });
         let mut vref = Self::new();
 
-        // let prev_cfg = adc.default_cfg();
+        let prev_cfg = adc.default_config();
 
         let vref_val: u32 = if vref.is_enabled() {
             adc.read(&mut vref).unwrap()
@@ -520,7 +541,7 @@ impl VRef {
             ret
         };
 
-        // adc.restore_cfg(prev_cfg);
+        adc.apply_config(prev_cfg);
 
         (u32::from(VDD_CALIB) * vrefint_cal / vref_val) as u16
     }
