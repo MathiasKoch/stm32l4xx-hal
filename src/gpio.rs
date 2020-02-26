@@ -22,6 +22,8 @@ pub trait GpioExt {
 pub struct Input<MODE> {
     _mode: PhantomData<MODE>,
 }
+/// Analog input (type state)
+pub struct Analog;
 
 /// Floating input (type state)
 pub struct Floating;
@@ -41,7 +43,8 @@ pub struct PushPull;
 pub struct OpenDrain;
 
 /// Alternate mode (type state)
-pub struct Alternate<AF, MODE> {
+pub struct Alternate<AF, MODE>
+{
     _af: PhantomData<AF>,
     _mode: PhantomData<MODE>,
 }
@@ -170,7 +173,7 @@ macro_rules! gpio {
             use super::{
                 Alternate,
                 AF1, AF2, AF3, AF4, AF5, AF6, AF7, AF8, AF9, AF10, AF11, AF12, AF13, AF14, AF15,
-                Floating, GpioExt, Input, OpenDrain, Output, Edge, ExtiPin,
+                Floating, GpioExt, Input, OpenDrain, Output, Edge, ExtiPin, Analog,
                 PullDown, PullUp, PushPull, State,
             };
 
@@ -186,6 +189,8 @@ macro_rules! gpio {
                 pub otyper: OTYPER,
                 /// Opaque PUPDR register
                 pub pupdr: PUPDR,
+                /// Opaque ASCR register
+                pub ascr: ASCR,
                 $(
                     /// Pin
                     pub $pxi: $PXi<$MODE>,
@@ -206,6 +211,7 @@ macro_rules! gpio {
                         moder: MODER { _0: () },
                         otyper: OTYPER { _0: () },
                         pupdr: PUPDR { _0: () },
+                        ascr: ASCR { _0: () },
                         $(
                             $pxi: $PXi { _mode: PhantomData },
                         )+
@@ -245,6 +251,17 @@ macro_rules! gpio {
                     unsafe { &(*$GPIOX::ptr()).moder }
                 }
             }
+
+            /// Opaque ASCR register
+            pub struct ASCR {
+                _0: (),
+            }
+
+        //    impl ASCR {
+        //        pub(crate) fn ascr(&mut self) -> &$gpioy::ASCR {
+        //            unsafe { &(*$GPIOX::ptr()).ascr }
+        //        }
+        //    }
 
             /// Opaque OTYPER register
             pub struct OTYPER {
@@ -515,6 +532,31 @@ macro_rules! gpio {
                         let od = self.into_push_pull_output(moder, otyper);
                         od.into_af9(moder, afr)
                     }
+
+                    /// Configures the pin to operate as an analog input pin
+                    pub fn into_analog(
+                        self,
+                        moder: &mut MODER,
+                        pupdr: &mut PUPDR,
+//                        ascr: &mut ASCR,
+                    ) -> $PXi<Analog> {
+                        let offset = 2 * $i;
+
+                        // analog mode
+                        let mode = 0b11;
+                        moder.moder().modify(|r, w| unsafe {
+                            w.bits((r.bits() & !(0b11 << offset)) | (mode << offset))
+                        });
+
+                        pupdr
+                            .pupdr()
+                            .modify(|r, w| unsafe { w.bits(r.bits() & !(0b11 << offset)) });
+
+//                        ascr.ascr().modify(|r, w| unsafe { w.bits(r.bits() | 0b1 << $i) });
+
+                        $PXi { _mode: PhantomData }
+                    }
+
                 }
 
                 impl $PXi<Output<OpenDrain>> {

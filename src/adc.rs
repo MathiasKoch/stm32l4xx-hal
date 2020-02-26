@@ -1,7 +1,9 @@
-use crate::gpio::gpioa::{PA0, PA1};
-use crate::gpio::{Analog, Floating, Input};
+use crate::gpio::gpioa;
+use crate::gpio::gpioc;
+use crate::gpio::gpiob;
+use crate::gpio::{Analog, Input};
 use crate::rcc::{AHB2, CCIPR};
-use core::marker::PhantomData;
+// use core::marker::PhantomData;
 use embedded_hal::adc::{Channel, OneShot};
 use crate::pac::{ADC1, ADC3, ADC2};
 
@@ -147,6 +149,22 @@ impl Config {
         self.sample_time = sample_time;
         self
     }
+    pub fn reg_oversampl(mut self, reg_oversampl: RegularOversampling) -> Self{
+        self.reg_oversampl = reg_oversampl;
+        self
+    }
+    pub fn inj_oversampl(mut self, inj_oversampl: InjectedOversampling) -> Self{
+        self.inj_oversampl = inj_oversampl;
+        self
+    }
+    pub fn oversampl_ratio(mut self, oversampl_ratio: OversamplingRatio) -> Self{
+        self.oversampl_ratio = oversampl_ratio;
+        self
+    }
+    pub fn oversampl_shift(mut self, oversampl_shift: OversamplingShift) -> Self{
+        self.oversampl_shift = oversampl_shift;
+        self
+    }
 }
 
 impl Default for Config {
@@ -168,7 +186,8 @@ impl Default for Config {
 
 pub struct Adc<ADC1> {
     adc: ADC1,
-    config : Config,
+    // config : Config,
+    sample_time:SampleTime,
 }
 
 #[cfg(feature = "stm32l4x5")]
@@ -184,7 +203,7 @@ impl Adc<ADC1> {
 
         //        common.ccr.modify(|_, w| unsafe { w.ckmode().bits(0b11) });
         //        common.ccr.modify(|_, w| unsafe { w.presc().bits(0b1011) });
-        ahb2.enr().modify(|r, w| w.adcen().set_bit());
+        ahb2.enr().modify(|_r, w| w.adcen().set_bit());
         //        common.ccr.modify(|_, w| w.vrefen().set_bit());
 
         // Disable deep power down and start ADC voltage regulator
@@ -198,8 +217,17 @@ impl Adc<ADC1> {
 
         while adc.cr.read().adcal().bit_is_set() {}
         
-        let adc = Self { adc, config};
-        // adc.applyConfig();
+        let mut adc = Self{
+            adc,
+            // config,
+            sample_time: config.sample_time,
+        };
+        adc.set_align(config.align);
+        adc.set_injected_oversampling(config.inj_oversampl);
+        adc.set_oversampling_ratio(config.oversampl_ratio);
+        adc.set_oversampling_shift(config.oversampl_shift);
+        adc.set_regular_oversampling(config.reg_oversampl);
+        adc.set_resolution(config.resolution);
         adc
     }
 
@@ -224,11 +252,11 @@ impl Adc<ADC1> {
     }
 
     pub fn set_regular_oversampling(&mut self, reg_oversampl : RegularOversampling){
-        self.adc.cfgr2.modify(|_, w| unsafe{ w.rovse().bit(reg_oversampl == RegularOversampling::On)})
+        self.adc.cfgr2.modify(|_, w| w.rovse().bit(reg_oversampl == RegularOversampling::On))
     }
 
     pub fn set_injected_oversampling(&mut self, inj_oversampl : InjectedOversampling){
-        self.adc.cfgr2.modify(|_, w| unsafe{ w.jovse().bit(inj_oversampl == InjectedOversampling::On)})
+        self.adc.cfgr2.modify(|_, w| w.jovse().bit(inj_oversampl == InjectedOversampling::On))
     }
 
     pub fn set_oversampling_ratio(&mut self, oversampl_ratio : OversamplingRatio){
@@ -242,47 +270,35 @@ impl Adc<ADC1> {
     //Todo: get for calfac
 }
 
-impl Channel<Adc<ADC1>> for PA0<Analog> {
-    type ID = u8;
 
-    fn channel() -> u8 {
-        17
-    }
-}
-
-impl Channel<Adc<ADC1>> for PA1<Analog> {
-    type ID = u8;
-
-    fn channel() -> u8 {
-        6
-    }
-}
 
 #[cfg(feature = "stm32l4x5")]
 impl<WORD, PIN> OneShot<Adc<ADC1>, WORD, PIN> for Adc<ADC1>
 where
     WORD: From<u16>,
-    PIN: Channel<Adc<ADC1>, ID = u8>,
+    PIN: AdcChannel<ADC1> + Channel<Adc<ADC1>, ID = u8>,
 {
     type Error = ();
 
     fn read(&mut self, pin: &mut PIN) -> nb::Result<WORD, Self::Error> {
         self.power_up();
-        self.adc.cfgr.modify(|_, w| unsafe { w.exten().bits(0b00) });
+        
+
+        pin.setup(&mut self.adc, self.sample_time);
+        
         self.adc
             .cfgr
-            .modify(|_, w| unsafe { w.align().clear_bit().res().bits(0b00).cont().clear_bit() });
+            .modify(|_, w| w.cont().clear_bit());
+        self.adc
+            .cfgr
+            .modify(|_, w| unsafe { w.exten().bits(0b00) });
         self.adc
             .sqr1
             .modify(|_, w| unsafe { w.sq1().bits(PIN::channel()) });
-        self.adc
-            .cfgr2
-            .modify(|_, w| unsafe { w.rovse().set_bit().ovsr().bits(0b011) });
         
         self.adc.isr.modify(|_, w| w.eoc().set_bit());
         self.adc.cr.modify(|_, w| w.adstart().set_bit());
 
-            //    cortex_m::asm::delay(80_000_000);
         while self.adc.isr.read().eoc().bit_is_clear() {}
 
         let val = self.adc.dr.read().regular_data().bits().into();
@@ -292,6 +308,42 @@ where
 }
 
 
+// impl Channel<Adc<ADC1>> for PA0<Analog> {
+//     type ID = u8;
+
+//     fn channel() -> u8 {
+//         17
+//     }
+// }
+
+// impl Channel<Adc<ADC1>> for PA1<Analog> {
+//     type ID = u8;
+
+//     fn channel() -> u8 {
+//         6
+//     }
+// }
+
+// macro_rules! adc_pins {
+//     ($($Adc:ty: ($pin:ty, $chan:expr)),+ $(,)*) => {
+//         $(
+//             impl Channel<Adc<$Adc>> for $pin {
+//                 type ID = u8;
+
+//                 fn channel() -> u8 { $chan }
+//             }
+//         )+
+//     };
+// }
+
+
+
+// adc_pins! {
+//     ADC1: (VTemp, 17),
+//     ADC3: (VTemp, 17),
+//     ADC1: (VRef, 0),
+//     ADC1: (VBat, 18)
+// }
 
 
 macro_rules! int_adc {
@@ -318,82 +370,71 @@ macro_rules! int_adc {
         )+
     };
 }
-
-macro_rules! adc_pins {
-    ($($Adc:ty: ($pin:ty, $chan:expr)),+ $(,)*) => {
-        $(
-            impl Channel<Adc<$Adc>> for $pin {
-                type ID = u8;
-
-                fn channel() -> u8 { $chan }
-            }
-        )+
-    };
-}
-
 int_adc! {
     VTemp: (17, tsen),
     VRef: (0, vrefen),
     VBat: (18, vbaten)
 }
 
-adc_pins! {
-    ADC1: (VTemp, 17),
-    ADC3: (VTemp, 17),
-    ADC1: (VRef, 0),
-    ADC1: (VBat, 18)
+
+pub trait AdcChannel<T> {
+    fn setup(&mut self, adc: &mut T, sample_time : SampleTime);
 }
 
-// pub trait AdcChannel {
-//     fn setup(&mut self, adc: &mut Adc);
-// }
+macro_rules! adc_pins {
+    ($($Adc:ty: ($Chan:ty: ($pin:ty, $chan:expr, $smprx:ident))),+ $(,)*) => {
+        $(
+            impl Channel<Adc<$Adc>> for $pin {
+                type ID = u8;
 
-// macro_rules! adc_pins {
-//     ($($Chan:ty: ($pin:ty, $bank_b:tt, $chan:expr, $smprx:ident)),+ $(,)*) => {
-//         $(
-//             impl Channel<Adc> for $pin {
-//                 type ID = u8;
+                fn channel() -> u8 { $chan }
+            }
 
-//                 fn channel() -> u8 { $chan }
-//             }
+            impl AdcChannel <$Adc> for $pin {
+                fn setup(&mut self, adc: &mut $Adc, sample_time : SampleTime) {
+                    adc.$smprx.modify(|r, w| unsafe {
+                        const OFFSET: u8 = 3 * $chan % 10;
+                        let mut bits = r.bits() as u32;
+                        bits &= !(0xfff << OFFSET);
+                        bits |= (sample_time as u32) << OFFSET;
+                        w.bits(bits)
+                    });
+                    // adc.rb.sqr5.write(|w| unsafe { w.sq1().bits($chan) });
+                }
+            }
+        )+
+    };
+}
 
-//             impl AdcChannel for $pin {
-//                 fn setup(&mut self, adc: &mut Adc) {
-//                     adc.rb.$smprx.modify(|r, w| unsafe {
-//                         const OFFSET: u8 = 3 * $chan % 10;
-//                         let mut bits = r.smp().bits() as u32;
-//                         bits &= !(0xfff << OFFSET);
-//                         bits |= (adc.sample_time as u32) << OFFSET;
-//                         w.bits(bits)
-//                     });
-//                     adc.rb.sqr5.write(|w| unsafe { w.sq1().bits($chan) });
-//                 }
-//             }
-//         )+
-//     };
-// }
+adc_pins! {
+    ADC1: (Channel0: (gpioc::PC0<Analog>, 1_u8, smpr1)),
+    ADC1: (Channel1: (gpioc::PC1<Analog>, 2_u8, smpr1)),
+    ADC1: (Channel2: (gpioc::PC2<Analog>, 3_u8, smpr1)),
+    ADC1: (Channel3: (gpioc::PC3<Analog>, 4_u8, smpr1)),
+    ADC1: (Channel4: (gpioa::PA0<Analog>, 5_u8, smpr1)),
+    ADC1: (Channel5: (gpioa::PA1<Analog>, 6_u8, smpr1)),
+    ADC1: (Channel6: (gpioa::PA2<Analog>, 7_u8, smpr1)),
+    ADC1: (Channel7: (gpioa::PA3<Analog>, 8_u8, smpr1)),
+    ADC1: (Channel8: (gpioa::PA4<Analog>, 9_u8, smpr1)),
+    ADC1: (Channel9: (gpioa::PA5<Analog>, 10_u8, smpr2)),
+    ADC1: (Channel10: (gpioa::PA6<Analog>, 11_u8, smpr2)),
+    ADC1: (Channel11: (gpioa::PA7<Analog>, 12_u8, smpr2)),
+    ADC1: (Channel12: (gpioc::PC4<Analog>, 13_u8, smpr2)),
+    ADC1: (Channel13: (gpioc::PC5<Analog>, 14_u8, smpr2)),
+    ADC1: (Channel14: (gpiob::PB0<Analog>, 15_u8, smpr2)),
+    ADC1: (Channel15: (gpiob::PB1<Analog>, 16_u8, smpr2)),
+    ADC1: (VTemp: (VTemp, 17_u8, smpr2)),
+    ADC1: (VBat: (VBat, 18_u8, smpr2)),
+}
 
-// adc_pins! {
-//     Channel0: (gpioa::PA0<Analog>, false, 0_u8, smpr3),
-//     Channel1: (gpioa::PA1<Analog>, false, 1_u8, smpr3),
-//     Channel2: (gpioa::PA2<Analog>, false, 2_u8, smpr3),
-//     Channel3: (gpioa::PA3<Analog>, false, 3_u8, smpr3),
-//     Channel4: (gpioa::PA4<Analog>, false, 4_u8, smpr3),
-//     Channel5: (gpioa::PA5<Analog>, false, 5_u8, smpr3),
-//     Channel6: (gpioa::PA6<Analog>, false, 6_u8, smpr3),
-//     Channel7: (gpioa::PA7<Analog>, false, 7_u8, smpr3),
-//     Channel8: (gpiob::PB0<Analog>, false, 8_u8, smpr3),
-//     Channel9: (gpiob::PB1<Analog>, false, 9_u8, smpr3),
-//     Channel10: (gpioc::PC0<Analog>, false, 10_u8, smpr2),
-//     Channel11: (gpioc::PC1<Analog>, false, 11_u8, smpr2),
-//     Channel12: (gpioc::PC2<Analog>, false, 12_u8, smpr2),
-//     Channel13: (gpioc::PC3<Analog>, false, 13_u8, smpr2),
-//     Channel14: (gpioc::PC4<Analog>, false, 14_u8, smpr2),
-//     Channel15: (gpioc::PC5<Analog>, false, 15_u8, smpr2),
-//     Channel18: (gpiob::PB12<Analog>, false, 18_u8, smpr2),
-//     Channel19: (gpiob::PB13<Analog>, false, 19_u8, smpr2),
-//     Channel20: (gpiob::PB14<Analog>, false, 20_u8, smpr1),
-//     Channel21: (gpiob::PB15<Analog>, false, 21_u8, smpr1),
-// }
+//Special case for VRef
+impl Channel<Adc<ADC1>> for VRef {
+    type ID = u8;
 
-
+    fn channel() -> u8 { 0 }
+}
+impl AdcChannel <ADC1> for VRef {
+    fn setup(&mut self, adc: &mut ADC1, sample_time : SampleTime) {
+        // adc.rb.sqr5.write(|w| unsafe { w.sq1().bits($chan) });
+    }
+}

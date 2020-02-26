@@ -58,6 +58,7 @@ stm32l4x3 = ["stm32l4/stm32l4x3"]
 stm32l4x5 = ["stm32l4/stm32l4x5"]
 stm32l4x6 = ["stm32l4/stm32l4x6"]
 unproven = ["embedded-hal/unproven"]
+default = ["stm32l4x5"]
 
 [dev-dependencies]
 panic-halt = "0.2.0"
