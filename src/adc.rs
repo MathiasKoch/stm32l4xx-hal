@@ -1,15 +1,15 @@
 use crate::gpio::gpioa;
 use crate::gpio::gpioc;
 use crate::gpio::gpiob;
-use crate::gpio::{Analog, Input};
+use crate::gpio::{Analog};
 use crate::rcc::{AHB2, CCIPR};
 use embedded_hal::adc::{Channel, OneShot};
 use crate::pac::{ADC1, ADC3, ADC2};
 use core::ptr;
 
-const VREFCAL: *const u16 = 0x1FFF_F7AA as *const u16;
-const VTEMPCAL30: *const u16 = 0x1FFF_F7A8 as *const u16;
-const VTEMPCAL110: *const u16 = 0x1FFF_F7CA as *const u16;
+const VREFCAL: *const u16 = 0x1FFF_75AA as *const u16;
+const VTEMPCAL30: *const u16 = 0x1FFF_75A8 as *const u16;
+const VTEMPCAL110: *const u16 = 0x1FFF_75CA as *const u16;
 const VDD_CALIB: u16 = 3000;
 
 /// ADC Result Alignment
@@ -468,8 +468,8 @@ impl Channel<Adc<ADC1>> for VRef {
     fn channel() -> u8 { 0 }
 }
 impl AdcChannel <ADC1> for VRef {
-    fn setup(&mut self, adc: &mut ADC1, sample_time : SampleTime) {
-        // adc.rb.sqr5.write(|w| unsafe { w.sq1().bits($chan) });
+    fn setup(&mut self, _adc: &mut ADC1, _sample_time : SampleTime) {
+        
     }
 }
 
@@ -487,6 +487,12 @@ impl VTemp{
         temperature as i16
     }
 
+    pub fn get_cal() -> (i32, i32){
+        let vtemp30_cal = i32::from(unsafe { ptr::read(VTEMPCAL30) }) * 100;
+        let vtemp110_cal = i32::from(unsafe { ptr::read(VTEMPCAL110) }) * 100;
+        (vtemp30_cal, vtemp110_cal)
+    }
+
     /// Read the value of the internal temperature sensor and return the
     /// result in 100ths of a degree centigrade.
     ///
@@ -501,13 +507,16 @@ impl VTemp{
         if !vtemp_preenable {
             vtemp.enable();
             //Delay set for worst case senario for STM32L475
-            cortex_m::asm::delay(1_000);
+            cortex_m::asm::delay(40);
 
         }
 
         let vdda = VRef::read_vdda(adc);
 
-        let prev_cfg = adc.default_config();
+        let prev_cfg = adc.get_config();
+        
+        //Sample time dependant on electrical caracteristics for temp sensor here STM32L475
+        adc.apply_config(Config::default().sample_time(SampleTime::T47_5));
 
         let vtemp_val = adc.read(&mut vtemp).unwrap();
 
@@ -530,16 +539,17 @@ impl VRef {
 
         let prev_cfg = adc.default_config();
 
-        let vref_val: u32 = if vref.is_enabled() {
-            adc.read(&mut vref).unwrap()
-        } else {
+        let vref_preenable = vref.is_enabled();
+
+        if !vref_preenable {
             vref.enable();
+        }
 
-            let ret = adc.read(&mut vref).unwrap();
-
+        let vref_val: u32 = adc.read(&mut vref).unwrap();
+       
+        if !vref_preenable{
             vref.disable();
-            ret
-        };
+        }
 
         adc.apply_config(prev_cfg);
 
