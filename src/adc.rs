@@ -12,6 +12,12 @@ const VTEMPCAL30: *const u16 = 0x1FFF_75A8 as *const u16;
 const VTEMPCAL110: *const u16 = 0x1FFF_75CA as *const u16;
 const VDD_CALIB: u16 = 3000;
 
+
+/// Inspiration has been drawn from three different ADC libs
+/// https://github.com/stm32-rs/stm32l1xx-hal/blob/master/src/adc.rs
+/// https://github.com/stm32-rs/stm32f0xx-hal/blob/master/src/adc.rs
+/// https://github.com/stm32-rs/stm32f4xx-hal/blob/master/src/adc.rs
+
 /// ADC Result Alignment
 #[derive(Copy, Clone, PartialEq)]
 // #[repr(bool)]
@@ -177,7 +183,7 @@ impl Default for Config {
         Config {
             align : Align::Right,
             resolution: Resolution::B12,
-            sample_time: SampleTime::T2_5,
+            sample_time: SampleTime::T47_5,
             reg_oversampl : RegularOversampling::Off,
             inj_oversampl : InjectedOversampling::Off,
             oversampl_ratio : OversamplingRatio::X16,
@@ -207,6 +213,8 @@ impl Adc<ADC1> {
 
         //        common.ccr.modify(|_, w| unsafe { w.ckmode().bits(0b11) });
         //        common.ccr.modify(|_, w| unsafe { w.presc().bits(0b1011) });
+        
+        //enable clock for ADC
         ahb2.enr().modify(|_r, w| w.adcen().set_bit());
         //        common.ccr.modify(|_, w| w.vrefen().set_bit());
 
@@ -216,10 +224,11 @@ impl Adc<ADC1> {
         cortex_m::asm::delay(8_000_000);
 
         // Calibrate
+        adc.cfgr.modify(|_, w| w.dmaen().clear_bit());
         adc.cr.modify(|_, w| w.adcaldif().clear_bit());
         adc.cr.modify(|_, w| w.adcal().set_bit());
-
         while adc.cr.read().adcal().bit_is_set() {}
+
         let temp_c = Config::default();
         let mut adc = Self{
             adc,
@@ -337,43 +346,6 @@ where
 }
 
 
-// impl Channel<Adc<ADC1>> for PA0<Analog> {
-//     type ID = u8;
-
-//     fn channel() -> u8 {
-//         17
-//     }
-// }
-
-// impl Channel<Adc<ADC1>> for PA1<Analog> {
-//     type ID = u8;
-
-//     fn channel() -> u8 {
-//         6
-//     }
-// }
-
-// macro_rules! adc_pins {
-//     ($($Adc:ty: ($pin:ty, $chan:expr)),+ $(,)*) => {
-//         $(
-//             impl Channel<Adc<$Adc>> for $pin {
-//                 type ID = u8;
-
-//                 fn channel() -> u8 { $chan }
-//             }
-//         )+
-//     };
-// }
-
-
-
-// adc_pins! {
-//     ADC1: (VTemp, 17),
-//     ADC3: (VTemp, 17),
-//     ADC1: (VRef, 0),
-//     ADC1: (VBat, 18)
-// }
-
 
 macro_rules! int_adc {
     ($($Chan:ident: ($chan:expr, $en:ident)),+ $(,)*) => {
@@ -485,6 +457,7 @@ impl VTemp{
         temperature /= vtemp110_cal - vtemp30_cal;
         temperature += 3000;
         temperature as i16
+
     }
 
     pub fn get_cal() -> (i32, i32){
@@ -500,7 +473,7 @@ impl VTemp{
     /// minimum delay needed to ensure a 10 us t<sub>START</sub> value.
     /// Otherwise it will approximate the required delay using ADC reads.
     //Presumes ADC is setup for reciving a single measurement
-    pub fn read(adc: &mut Adc<ADC1>) -> i16 {
+    pub fn read(adc: &mut Adc<ADC1>) -> (i16, u16, u16) {
         let mut vtemp = Self::new();
         let vtemp_preenable = vtemp.is_enabled();
 
@@ -526,7 +499,7 @@ impl VTemp{
 
         adc.apply_config(prev_cfg);
 
-        Self::convert_temp(vtemp_val, vdda)
+        (Self::convert_temp(vtemp_val, vdda), vtemp_val, vdda)
     }
 }
 
