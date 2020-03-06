@@ -191,8 +191,108 @@ impl Default for Config {
         }
     }
 }
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u8)]
+pub enum ClockMode {
+    /// Makes use of the ADC select from RCC (Asynchronous clock mode),
+    /// generated at product level (refer to Section 6: Reset and clock control (RCC))
+    CkAdc = 0b00,
+    /// HCLK/1 (Synchronous clock mode). 
+    /// This configuration must be enabled only if the AHB
+    /// clock prescaler is set to 1 (HPRE[3:0] = 0xxx in RCC_CFGR register) and if the system clock
+    HclkDiv1 = 0b01,
+    /// 8 bit Resolution
+    HclkDiv2 = 0b10,
+    /// 6 bit Resolution
+    HclkDiv4 = 0b11,
+}
 
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u8)]
+pub enum AdcClockSelect {
+    /// No clock selected
+    NoClock = 0b00,
+    /// PLLSAI1 “R” clock (PLLADC1CLK) selected as ADCs clock
+    Pllsai1 = 0b01,
+    /// PLLSAI2 “R” clock (PLLADC2CLK) selected as ADCs clock
+    Pllsai2 = 0b10,
+    /// System clock selected as ADCs clock
+    SysClk = 0b11,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub struct CommonConfig {
+    pub clock_mode : ClockMode,
+    pub adc_clk_sel : AdcClockSelect,
+}
+
+impl CommonConfig {
+    pub fn clock_mode(mut self, clock_mode: ClockMode) -> Self {
+        self.clock_mode = clock_mode;
+        self
+    }
+
+    pub fn adc_clk_sel(mut self, adc_clk_sel: AdcClockSelect) -> Self {
+        self.adc_clk_sel = adc_clk_sel;
+        self
+    }
+}
+
+impl Default for CommonConfig {
+    fn default() -> CommonConfig {
+        CommonConfig {
+            clock_mode : ClockMode::HclkDiv2,
+            adc_clk_sel : AdcClockSelect::NoClock,
+        }
+    }
+}
+
+/// Global setup for ADC
+pub fn adc_global_setup(config : CommonConfig, ahb2 : &mut AHB2, ccipr : &mut CCIPR) {
+
+    // Setup Rcc clock select
+    ccipr.ccipr().modify(|_, w|unsafe { w.adcsel().bits(config.adc_clk_sel as u8) } );  
+    
+    // Enable clock for ADC
+    ahb2.enr().modify(|_r, w| w.adcen().set_bit());
+    
+    // Set ADC common clock
+    // The software is allowed to write these bits only when the ADCs are disabled
+    //  (ADCAL=0, JADSTART=0, ADSTART=0, ADSTP=0, ADDIS=0 and ADEN=0) in all adc_cr registers.    
+    let adc_common = unsafe { &*crate::device::ADC123_COMMON::ptr() };
+    if !any_adc_active() {
+        adc_common.ccr.modify(|_, w| unsafe {w.ckmode().bits(config.clock_mode as u8)} );
+    }
+
+    // Not possible yet, due to missing register
+    //        adc_common.ccr.modify(|_, w| unsafe { w.presc().bits(0b1011) });
+}
+
+/// Checks if any ADCs are enabled or running
+fn any_adc_active() -> bool{
+    let adc1 = unsafe { &*crate::device::ADC1::ptr() };
+    let adc2 = unsafe { &*crate::device::ADC2::ptr() };
+    let adc3 = unsafe { &*crate::device::ADC3::ptr() };
+    adc1.cr.read().adcal().bit_is_set()       |
+        adc1.cr.read().adstp().bit_is_set()     |
+        adc1.cr.read().jadstart().bit_is_set()  |
+        adc1.cr.read().adstart().bit_is_set()   |
+        adc1.cr.read().addis().bit_is_set()     |
+        adc1.cr.read().aden().bit_is_set()      |
+        adc2.cr.read().adcal().bit_is_set()   |
+        adc2.cr.read().adstp().bit_is_set()     |
+        adc2.cr.read().jadstart().bit_is_set()  |
+        adc2.cr.read().adstart().bit_is_set()   |
+        adc2.cr.read().addis().bit_is_set()     |
+        adc2.cr.read().aden().bit_is_set()      |
+        adc3.cr.read().adcal().bit_is_set()   |
+        adc3.cr.read().adstp().bit_is_set()     |
+        adc3.cr.read().jadstart().bit_is_set()  |
+        adc3.cr.read().adstart().bit_is_set()   |
+        adc3.cr.read().addis().bit_is_set()     |
+        adc3.cr.read().aden().bit_is_set() 
+}
 
 
 pub struct Adc<ADC1> {
@@ -202,21 +302,13 @@ pub struct Adc<ADC1> {
 
 #[cfg(feature = "stm32l4x5")]
 impl Adc<ADC1> {
+    /// Sets up the ADC
     pub fn adc1(adc: ADC1, config : Config, ahb2 : &mut AHB2, ccipr : &mut CCIPR) -> Self {
 
-        // Select system clock as clock for ADC
-        ccipr.ccipr().modify(|_, w|unsafe { w.adcsel().bits(0b11) } );
-        // 00: No clock selected
-        // 01: PLLSAI1 “R” clock (PLLADC1CLK) selected as ADCs clock
-        // 10: PLLSAI2 “R” clock (PLLADC2CLK) selected as ADCs clock
-        // 11: System clock selected as ADCs clock
-
-        //        common.ccr.modify(|_, w| unsafe { w.ckmode().bits(0b11) });
-        //        common.ccr.modify(|_, w| unsafe { w.presc().bits(0b1011) });
-        
-        //enable clock for ADC
-        ahb2.enr().modify(|_r, w| w.adcen().set_bit());
-        //        common.ccr.modify(|_, w| w.vrefen().set_bit());
+        //Check these two registers for 0
+        if ahb2.enr().read().adcen().bit_is_clear(){
+            adc_global_setup(CommonConfig::default(), ahb2, ccipr);
+        }
 
         // Disable deep power down and start ADC voltage regulator
         adc.cr.modify(|_, w| w.deeppwd().clear_bit());
@@ -318,6 +410,12 @@ where
     fn read(&mut self, pin: &mut PIN) -> nb::Result<WORD, Self::Error> {
         self.power_up();
 
+        //Save ADC state
+        //Note: Sampling time for pin is not restored
+        let cont_mode = self.adc.cfgr.read().cont().bit_is_set();
+        let external_trig = self.adc.cfgr.read().exten().bits();
+        let seq_1 = self.adc.sqr1.read().sq1().bits();
+        let seq_len = self.adc.sqr1.read().l3().bits();
 
         pin.setup(&mut self.adc, self.config.sample_time);
 
@@ -340,6 +438,21 @@ where
         while self.adc.isr.read().eoc().bit_is_clear() {}
 
         let val = self.adc.dr.read().regular_data().bits().into();
+
+        //Restore state
+        self.adc
+            .cfgr
+            .modify(|_, w| w.cont().bit(cont_mode));
+        self.adc
+            .cfgr
+            .modify(|_, w| unsafe { w.exten().bits(external_trig) });
+        self.adc
+            .sqr1
+            .modify(|_, w| unsafe { w.sq1().bits(seq_1) });
+        self.adc
+            .sqr1
+            .modify(|_, w| unsafe { w.l3().bits(seq_len)});
+
         self.power_down();
         Ok(val)
     }
@@ -511,6 +624,8 @@ impl VRef {
         let mut vref = Self::new();
 
         let prev_cfg = adc.default_config();
+        // let prev_cfg = adc.get_config();
+        // adc.apply_config(Config::default().sample_time(SampleTime::T640_5));
 
         let vref_preenable = vref.is_enabled();
 
