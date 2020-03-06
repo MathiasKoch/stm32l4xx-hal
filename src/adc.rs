@@ -394,7 +394,6 @@ impl Adc<ADC1> {
         self.adc.cfgr2.modify(|_, w| unsafe{ w.ovss().bits(oversampl_shift as u8)})
     }
 
-    //Todo: get for calfac
 }
 
 
