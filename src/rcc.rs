@@ -295,6 +295,7 @@ impl APB2 {
     }
 }
 
+#[derive(Debug, PartialEq)]
 /// HSE Configuration
 struct HseConfig {
     /// Clock speed of HSE
@@ -302,13 +303,18 @@ struct HseConfig {
     /// If the clock driving circuitry is bypassed i.e. using an oscillator, not a crystal or
     /// resonator
     bypass: CrystalBypass,
+    /// Clock Security System enable/disable
+    css: ClockSecuritySystem,
 }
 
+#[derive(Debug, PartialEq)]
 /// LSE Configuration
 struct LseConfig {
     /// If the clock driving circuitry is bypassed i.e. using an oscillator, not a crystal or
     /// resonator
     bypass: CrystalBypass,
+    /// Clock Security System enable/disable
+    css: ClockSecuritySystem,
 }
 
 /// Crystal bypass selector
@@ -317,6 +323,19 @@ pub enum CrystalBypass {
     /// If the clock driving circuitry is bypassed i.e. using an oscillator
     Enable,
     /// If the clock driving circuitry is not bypassed i.e. using a crystal or resonator
+    Disable,
+}
+
+/// Clock Security System (CSS) selector
+///
+/// When this is enabled on HSE it will fire of the NMI interrupt on failure and for the LSE the
+/// MCU will be woken if in Standby and then the LSECSS interrupt will fire. See datasheet on how
+/// to recover for CSS failures.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ClockSecuritySystem {
+    /// Enable the clock security system to detect clock failures
+    Enable,
+    /// Leave the clock security system disabled
     Disable,
 }
 
@@ -339,21 +358,25 @@ pub struct CFGR {
 
 impl CFGR {
     /// Add an HSE to the system
-    pub fn hse<F>(mut self, freq: F, bypass: CrystalBypass) -> Self
+    pub fn hse<F>(mut self, freq: F, bypass: CrystalBypass, css: ClockSecuritySystem) -> Self
     where
         F: Into<Hertz>,
     {
         self.hse = Some(HseConfig {
             speed: freq.into().0,
             bypass: bypass,
+            css: css,
         });
 
         self
     }
 
     /// Add an 32.768 kHz LSE to the system
-    pub fn lse(mut self, bypass: CrystalBypass) -> Self {
-        self.lse = Some(LseConfig { bypass: bypass });
+    pub fn lse(mut self, bypass: CrystalBypass, css: ClockSecuritySystem) -> Self {
+        self.lse = Some(LseConfig {
+            bypass: bypass,
+            css: css,
+        });
 
         self
     }
@@ -436,24 +459,37 @@ impl CFGR {
         // 1. Setup clocks
         //
 
-        // Turn on the internal 32khz lsi oscillator
-        if self.lsi {
-            rcc.csr.modify(|_, w| w.lsion().set_bit());
-            // Wait until LSI is running
-            while rcc.csr.read().lsirdy().bit_is_clear() {}
-        }
+        // Turn on the internal 32 kHz LSI oscillator
+        let lsi_used = match (self.lsi, &self.lse) {
+            (true, _)
+            | (
+                _,
+                &Some(LseConfig {
+                    bypass: _,
+                    css: ClockSecuritySystem::Enable,
+                }),
+            ) => {
+                rcc.csr.modify(|_, w| w.lsion().set_bit());
 
-        if let Some(cfg) = &self.lse {
-            // TODO: Setup CSS
+                // Wait until LSI is running
+                while rcc.csr.read().lsirdy().bit_is_clear() {}
 
+                true
+            }
+            _ => false,
+        };
+
+        if let Some(lse_cfg) = &self.lse {
             // 1. Unlock the backup domain
             pwr.cr1.reg().modify(|_, w| w.dbp().set_bit());
 
             // 2. Setup the LSE
             rcc.bdcr.modify(|_, w| {
-                w.lseon().set_bit();
+                unsafe {
+                    w.lseon().set_bit().rtcsel().bits(0b01); // Enable LSE and use as RTC source
+                }
 
-                if cfg.bypass == CrystalBypass::Enable {
+                if lse_cfg.bypass == CrystalBypass::Enable {
                     w.lsebyp().set_bit();
                 } else {
                     unsafe {
@@ -466,6 +502,13 @@ impl CFGR {
 
             // Wait until LSE is running
             while rcc.bdcr.read().lserdy().bit_is_clear() {}
+
+            // Setup CSS
+            if lse_cfg.css == ClockSecuritySystem::Enable {
+                // Enable CSS and interrupt
+                rcc.bdcr.modify(|_, w| w.lsecsson().set_bit());
+                rcc.cier.modify(|_, w| w.lsecssie().set_bit());
+            }
         }
 
         // If HSE is available, set it up
@@ -481,6 +524,12 @@ impl CFGR {
             });
 
             while rcc.cr.read().hserdy().bit_is_clear() {}
+
+            // Setup CSS
+            if hse_cfg.css == ClockSecuritySystem::Enable {
+                // Enable CSS
+                rcc.cr.modify(|_, w| w.csson().set_bit());
+            }
         }
 
         if let Some(msi) = self.msi {
@@ -528,22 +577,18 @@ impl CFGR {
         let (clock_speed, pll_source) = if let Some(source) = self.pll_source {
             match source {
                 PllSource::HSE => {
-                    assert!(self.hse.is_some());
-
                     if let Some(hse) = &self.hse {
                         (hse.speed, source)
                     } else {
-                        unreachable!()
+                        panic!("HSE selected as PLL source, but not enabled");
                     }
                 }
                 PllSource::HSI16 => (HSI, source),
                 PllSource::MSI => {
-                    assert!(self.msi.is_some());
-
                     if let Some(msi) = self.msi {
                         (msi.to_hertz().0, source)
                     } else {
-                        unreachable!()
+                        panic!("MSI selected as PLL source, but not enabled");
                     }
                 }
             }
@@ -564,15 +609,21 @@ impl CFGR {
             }
         };
 
-        let pllconf = if self.pll_config.is_none() {
-            // Calculate PLL multiplier and create a best effort pll config, just multiply n
-            let plln = (2 * self.sysclk.unwrap_or(HSI)) / clock_speed;
+        // Check if HSI should be started
+        if pll_source == PllSource::HSI16 || (self.msi.is_none() && self.hse.is_none()) {
+            rcc.cr.write(|w| w.hsion().set_bit());
+            while rcc.cr.read().hsirdy().bit_is_clear() {}
+        }
 
-            Some(PllConfig {
-                m: 0b0,
-                r: 0b0,
-                n: plln as u8,
-            })
+        let pllconf = if self.pll_config.is_none() {
+            if let Some(sysclk) = self.sysclk {
+                // Calculate PLL multiplier and create a best effort pll config, just multiply n
+                let plln = (2 * sysclk) / clock_speed;
+
+                Some(PllConfig::new(1, plln as u8, PllDivider::Div2))
+            } else {
+                None
+            }
         } else {
             self.pll_config
         };
@@ -652,7 +703,7 @@ impl CFGR {
         let sysclk_src_bits;
         if let Some(pllconf) = pllconf {
             // Sanity-checks per RM0394, 6.4.4 PLL configuration register (RCC_PLLCFGR)
-            let r = 1 << (pllconf.r + 1);
+            let r = pllconf.r.to_division_factor();
             let clock_speed = clock_speed / (pllconf.m as u32 + 1);
             let vco = clock_speed * pllconf.n as u32;
             let output_clock = vco / r;
@@ -673,18 +724,13 @@ impl CFGR {
 
             let pllsrc_bits = pll_source.to_pllsrc();
 
-            if pll_source == PllSource::HSI16 {
-                rcc.cr.write(|w| w.hsion().set_bit());
-                while rcc.cr.read().hsirdy().bit_is_clear() {}
-            }
-
             rcc.pllcfgr.modify(|_, w| unsafe {
                 w.pllsrc()
                     .bits(pllsrc_bits)
                     .pllm()
                     .bits(pllconf.m)
                     .pllr()
-                    .bits(pllconf.r)
+                    .bits(pllconf.r.to_bits())
                     .plln()
                     .bits(pllconf.n)
             });
@@ -728,9 +774,23 @@ impl CFGR {
 
         while rcc.cfgr.read().sws().bits() != sysclk_src_bits {}
 
+        //
+        // 3. Shutdown unused clocks that have auto-started
+        //
+
+        // MSI always starts on reset
+        if self.msi.is_none() {
+            rcc.cr
+                .modify(|_, w| w.msion().clear_bit().msipllen().clear_bit())
+        }
+
+        //
+        // 4. Clock setup done!
+        //
+
         Clocks {
             hclk: Hertz(hclk),
-            lsi: self.lsi,
+            lsi: lsi_used,
             lse: self.lse.is_some(),
             msi: self.msi,
             hsi48: self.hsi48,
@@ -739,19 +799,65 @@ impl CFGR {
             ppre1: ppre1,
             ppre2: ppre2,
             sysclk: Hertz(sysclk),
+            pll_source: pllconf.map(|_| pll_source),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-/// Pll Configuration - Calculation = ((SourceClk / m) * n) / r
+/// PLL output divider options
+pub enum PllDivider {
+    /// Divider PLL output by 2
+    Div2 = 0b00,
+    /// Divider PLL output by 4
+    Div4 = 0b01,
+    /// Divider PLL output by 6
+    Div6 = 0b10,
+    /// Divider PLL output by 8
+    Div8 = 0b11,
+}
+
+impl PllDivider {
+    #[inline(always)]
+    fn to_bits(self) -> u8 {
+        self as u8
+    }
+
+    #[inline(always)]
+    fn to_division_factor(self) -> u32 {
+        match self {
+            Self::Div2 => 2,
+            Self::Div4 => 4,
+            Self::Div6 => 6,
+            Self::Div8 => 8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+/// PLL Configuration
 pub struct PllConfig {
-    /// Main PLL Division factor
-    pub m: u8,
-    /// Main Pll Multiplication factor
-    pub n: u8,
-    /// Main PLL division factor for PLLCLK (system clock)
-    pub r: u8,
+    // Main PLL division factor
+    m: u8,
+    // Main PLL multiplication factor
+    n: u8,
+    // Main PLL division factor for PLLCLK (system clock)
+    r: PllDivider,
+}
+
+impl PllConfig {
+    /// Create a new PLL config from manual settings
+    ///
+    /// PLL output = ((SourceClk / input_divider) * multiplier) / output_divider
+    pub fn new(input_divider: u8, multiplier: u8, output_divider: PllDivider) -> Self {
+        assert!(input_divider > 0);
+
+        PllConfig {
+            m: input_divider - 1,
+            n: multiplier,
+            r: output_divider,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -787,11 +893,10 @@ pub struct Clocks {
     lse: bool,
     pclk1: Hertz,
     pclk2: Hertz,
-    // TODO remove `allow`
-    #[allow(dead_code)]
     ppre1: u8,
     ppre2: u8,
     sysclk: Hertz,
+    pll_source: Option<PllSource>,
 }
 
 impl Clocks {
