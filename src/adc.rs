@@ -313,7 +313,10 @@ impl Adc<ADC1> {
         // Disable deep power down and start ADC voltage regulator
         adc.cr.modify(|_, w| w.deeppwd().clear_bit());
         adc.cr.modify(|_, w| w.advregen().set_bit());
-        cortex_m::asm::delay(8_000_000);
+        cortex_m::asm::delay(8_000_000); //Delay at 80MHz for L475
+        if adc.cr.read().advregen().bit_is_clear(){
+            panic!("ADC Vreg not enabled corectly")
+        }
 
         // Calibrate
         adc.cfgr.modify(|_, w| w.dmaen().clear_bit());
@@ -585,7 +588,7 @@ impl VTemp{
     /// minimum delay needed to ensure a 10 us t<sub>START</sub> value.
     /// Otherwise it will approximate the required delay using ADC reads.
     //Presumes ADC is setup for reciving a single measurement
-    pub fn read(adc: &mut Adc<ADC1>) -> (i16, u16, u16) {
+    pub fn read(adc: &mut Adc<ADC1>) -> i16 {
         let mut vtemp = Self::new();
         let vtemp_preenable = vtemp.is_enabled();
 
@@ -611,7 +614,7 @@ impl VTemp{
 
         adc.apply_config(prev_cfg);
 
-        (Self::convert_temp(vtemp_val, vdda), vtemp_val, vdda)
+        Self::convert_temp(vtemp_val, vdda)
     }
 }
 
