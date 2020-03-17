@@ -33,17 +33,21 @@ fn main() -> ! {
     let mut rcc = dp.RCC.constrain();
 
     // Try a different clock configuration
+    hal::adc::adc_global_setup(
+        hal::adc::CommonConfig::default()
+        .clock_mode(hal::adc::ClockMode::HclkDiv4),
+        &mut rcc.ahb2, &mut rcc.ccipr);
     let mut adc1 = Adc::adc1(
         dp.ADC1, hal::adc::Config::default(),
         &mut rcc.ahb2, &mut rcc.ccipr
     );
 
    
-    let mut r = VRef::new();
+    let mut t = VTemp::new();
     r.enable();
     let mut r = VRef::new();
     r.enable();
-    cortex_m::asm::delay(40);
+    //cortex_m::asm::delay(40);
 
     let temp_val: u16 =  match adc1.read(&mut t){
         Ok(v) => v,
