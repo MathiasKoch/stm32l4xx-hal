@@ -58,12 +58,6 @@ pub use crate::pac as device;
 ))]
 pub use crate::pac as stm32;
 
-<<<<<<< HEAD
-pub mod datetime;
-=======
-pub mod traits;
-
->>>>>>> Cargo fmt
 #[cfg(any(
     feature = "stm32l4x1",
     feature = "stm32l4x2",
