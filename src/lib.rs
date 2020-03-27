@@ -58,7 +58,12 @@ pub use crate::pac as device;
 ))]
 pub use crate::pac as stm32;
 
+<<<<<<< HEAD
 pub mod datetime;
+=======
+pub mod traits;
+
+>>>>>>> Cargo fmt
 #[cfg(any(
     feature = "stm32l4x1",
     feature = "stm32l4x2",
@@ -67,6 +72,7 @@ pub mod datetime;
     feature = "stm32l4x6"
 ))]
 pub mod crc;
+pub mod datetime;
 #[cfg(any(
     feature = "stm32l4x1",
     feature = "stm32l4x2",
@@ -115,6 +121,14 @@ pub mod i2c;
     feature = "stm32l4x6"
 ))]
 pub mod prelude;
+#[cfg(any(
+    feature = "stm32l4x1",
+    feature = "stm32l4x2",
+    feature = "stm32l4x3",
+    feature = "stm32l4x5",
+    feature = "stm32l4x6"
+))]
+pub mod pwm;
 #[cfg(any(
     feature = "stm32l4x1",
     feature = "stm32l4x2",
@@ -192,11 +206,3 @@ pub mod tsc;
     any(feature = "stm32l4x2", feature = "stm32l4x3")
 ))]
 pub mod usb;
-#[cfg(any(
-    feature = "stm32l4x1",
-    feature = "stm32l4x2",
-    feature = "stm32l4x3",
-    feature = "stm32l4x5",
-    feature = "stm32l4x6"
-))]
-pub mod pwm;

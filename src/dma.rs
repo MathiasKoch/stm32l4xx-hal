@@ -34,7 +34,7 @@ where
     buffer: BUFFER,
     channel: CHANNEL,
     readable_half: Half,
-    consumed_offset: usize
+    consumed_offset: usize,
 }
 
 impl<BUFFER, CHANNEL> CircBuffer<BUFFER, CHANNEL> {
