@@ -58,6 +58,7 @@ pub use crate::pac as device;
 ))]
 pub use crate::pac as stm32;
 
+
 pub mod traits;
 
 #[cfg(any(
