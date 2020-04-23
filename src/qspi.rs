@@ -66,8 +66,8 @@ impl Default for QspiConfig{
             clock_mode : ClockMode::Mode0,
             fifo_threshold : 1,
             qspi_mode : QspiMode::QuadChannel,
-            sample_shift : SampleShift::None,
-            chip_select_high_time : 0,
+            sample_shift : SampleShift::HalfACycle,
+            chip_select_high_time : 1,
             double_data_rate : false,
             qpi_mode : false,
         }
@@ -155,7 +155,7 @@ impl Qspi {
         ahb3.enr().modify(|_,w| w.qspien().bit(true));
 
         // Disable QUADSPI before configuring it.
-        qspi.cr.write(|w| {
+        qspi.cr.modify(|_, w| {
             w.en().clear_bit()
         });
 
@@ -181,6 +181,8 @@ impl Qspi {
         if self.qspi.sr.read().busy().bit_is_set() {
             //Todo: Handle error
             // return Err(QspiError::Busy);
+            #[cfg(feature = "logging")]
+            log::debug!{"Busy..."};
         }
 
         
@@ -189,11 +191,20 @@ impl Qspi {
             .csht().bits(config.chip_select_high_time as u8)
             .ckmode().bit(config.clock_mode == ClockMode::Mode3)
         });
+
+        self.qspi.cr.modify(|_, w| unsafe {
+                w.fthres().bits(config.fifo_threshold as u8)
+
+        });
+
+        while self.qspi.sr.read().busy().bit_is_set(){
+            #[cfg(feature = "logging")]
+            log::debug!{"Busy waiting"};
+        }
         
         // modify the prescaler and select flash bank 2 - flash bank 1 is currently unsupported.
-        self.qspi.cr.write(|w| unsafe {
+        self.qspi.cr.modify(|_, w| unsafe {
             w.prescaler().bits(config.clock_prescaler as u8)
-                .fthres().bits(config.fifo_threshold as u8)
                 .sshift().bit(config.sample_shift == SampleShift::HalfACycle)
                 .en().set_bit()
 
@@ -205,6 +216,8 @@ impl Qspi {
         if self.is_busy() {
             //Todo handle error
             // return Err(QspiError::Busy);
+            #[cfg(feature = "logging")]
+            log::debug!{"Busy..."};
         }
         // Clear the transfer complete flag.
         self.qspi.fcr.modify(|_ ,w| w.ctcf().set_bit());
@@ -213,6 +226,7 @@ impl Qspi {
         let mut instruction : u8 = 0;
         let mut imode : u8 = 0;
         let mut admode : u8 = 0;
+        let mut adsize : u8 = 0;
         let mut abmode : u8 = 0;
         let mut absize : u8 = 0;
 
@@ -241,6 +255,7 @@ impl Qspi {
         // Note Address mode
         if let Some(_) = command.address {
             admode = self.config.qspi_mode as u8;
+            adsize = self.config.address_size as u8;
         }
         
         // Write Alternative bytes
@@ -281,12 +296,13 @@ impl Qspi {
             unsafe {
                 w.fmode().bits(0b01)
                     .admode().bits(admode)
-                    .adsize().bits(self.config.address_size as u8)
+                    .adsize().bits(adsize)
                     .abmode().bits(abmode)
                     .absize().bits(absize)
                     .ddrm().bit(self.config.double_data_rate)
                     .dcyc().bits(command.dummy_cycles)
-                    .dmode().bits(dmode)
+                    .dmode().bits(0b01)
+                    // .dmode().bits(dmode)
                     .imode().bits(imode)
                     .instruction().bits(instruction)
 
@@ -341,19 +357,21 @@ impl Qspi {
         }
         //When transfer complete, empty fifo buffer
         while self.qspi.sr.read().flevel().bits() > 0 {
+            #[cfg(feature = "logging")]
+            log::debug!{"flevel not zero: {:?}", self.qspi.sr.read().flevel().bits()};
             if let Some(v) = b.next() {
-                unsafe{
-                    *v = ptr::read_volatile(&self.qspi.dr as *const _ as *const u8);
-                }
                 #[cfg(feature = "logging")]
-                log::debug!{"Recived: {:x}", *v};
+                log::debug!{"Recived: {:x}", self.qspi.dr.read().bits()};
+                // unsafe{
+                //     *v = ptr::read_volatile(&self.qspi.dr as *const _ as *const u8);
+                // }
+                // #[cfg(feature = "logging")]
+                // log::debug!{"Recived: {:x}", *v};
             } else {
                 #[cfg(feature = "logging")]
                 log::debug!{"OVERFLOW!"};
                 // OVERFLOW
             }
-            #[cfg(feature = "logging")]
-            log::debug!{"flevel not zero: {:?}", self.qspi.sr.read().flevel().bits()};
         }
 
         // unsafe {
