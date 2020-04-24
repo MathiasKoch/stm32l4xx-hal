@@ -149,10 +149,11 @@ pub struct QspiWriteCommand<'c>{
 }
 
 pub struct QspiReadCommand<'c>{
-    pub instruction : Option<u8>,
-    pub address : Option<u32>,
-    pub alternative_bytes : Option<&'c[u8]>,
+    pub instruction : Option<(u8, QspiMode)>,
+    pub address : Option<(u32, QspiMode)>,
+    pub alternative_bytes : Option<(&'c[u8], QspiMode)>,
     pub dummy_cycles : u8,
+    pub data_mode : QspiMode,
     pub recive_lenght : u32,
 }
 
@@ -234,7 +235,6 @@ impl <PINS> Qspi <PINS> {
     pub fn transfer(& self, command : QspiReadCommand, buffer : &mut [u8]) {
         if self.is_busy() {
             //Todo handle error
-            // return Err(QspiError::Busy);
             #[cfg(feature = "logging")]
             log::debug!{"Busy..."};
         }
@@ -255,35 +255,47 @@ impl <PINS> Qspi <PINS> {
             if self.config.qpi_mode{
                 dmode = self.config.qspi_mode as u8;
             } else {
-                dmode = 0b01;
+                dmode = command.data_mode as u8;
             }
         }
        
         #[cfg(feature = "logging")]
         log::debug!{"DLR bit :{:?}", self.qspi.dlr.read().dl().bits()};
         
-        //Instruction mode
-        if let Some(_) = command.instruction {
+        //Write instruction mode
+        if let Some((inst,mode)) = command.instruction {
             if self.config.qpi_mode {
                 imode = self.config.qspi_mode as u8;
                 #[cfg(feature = "logging")]
-                log::debug!("Instruction qpi mode");
+                log::debug!("Instruction quad mode");
             } else {
-                imode = 0b01;
+                imode = mode as u8;
                 #[cfg(feature = "logging")]
                 log::debug!("Instruction single mode");
             }
+            instruction = inst;
+            #[cfg(feature = "logging")]
+            log::debug!("Instruction: {:x}", inst);    
         }
 
         // Note Address mode
-        if let Some(_) = command.address {
-            admode = self.config.qspi_mode as u8;
+        if let Some((_, mode)) = command.address {
+            if self.config.qpi_mode {
+                admode = self.config.qspi_mode as u8;
+            } else {
+                admode = mode as u8;
+            }
             adsize = self.config.address_size as u8;
         }
         
         // Write Alternative bytes
-        if let Some(a_bytes) = command.alternative_bytes {
-            abmode = self.config.qspi_mode as u8;
+        if let Some((a_bytes, mode)) = command.alternative_bytes {
+            if self.config.qpi_mode {
+                abmode = self.config.qspi_mode as u8;
+            } else {
+                abmode = mode as u8;
+            }
+            
             absize = a_bytes.len() as u8 - 1;
 
             self.qspi.abr.write(|w| {
@@ -299,12 +311,6 @@ impl <PINS> Qspi <PINS> {
             });
         }
         
-        //Note instruction, triggers send if no address required
-        if let Some(inst) = command.instruction {
-            #[cfg(feature = "logging")]
-            log::debug!("Instruction: {:x}", inst);
-            instruction = inst;
-        }
         #[cfg(feature = "logging")]
         log::debug!("0 - Tcf bit :{:?}\tCCR:{:x}\tCR:{:x}\tDCR:{:x}\tSR:{:x}", 
             self.qspi.sr.read().tcf().bit_is_set(), 
@@ -327,33 +333,32 @@ impl <PINS> Qspi <PINS> {
                     .dmode().bits(dmode)
                     .imode().bits(imode)
                     .instruction().bits(instruction)
-
             });
  
 
 
-        #[cfg(feature = "logging")]
-        log::debug!("1 - Tcf bit :{:?}\tCCR:{:x}\tCR:{:x}\tDCR:{:x}\tSR:{:x}", 
-            self.qspi.sr.read().tcf().bit_is_set(), 
-            self.qspi.ccr.read().bits(),
-            self.qspi.cr.read().bits(),
-            self.qspi.dcr.read().bits(),
-            self.qspi.sr.read().bits()
-        );
+        // #[cfg(feature = "logging")]
+        // log::debug!("1 - Tcf bit :{:?}\tCCR:{:x}\tCR:{:x}\tDCR:{:x}\tSR:{:x}", 
+        //     self.qspi.sr.read().tcf().bit_is_set(), 
+        //     self.qspi.ccr.read().bits(),
+        //     self.qspi.cr.read().bits(),
+        //     self.qspi.dcr.read().bits(),
+        //     self.qspi.sr.read().bits()
+        // );
 
         //Write address, triggers send
-        if let Some(addr) = command.address {
+        if let Some((addr,_)) = command.address {
             self.qspi.ar.write(|w| unsafe {w.address().bits(addr)});
         }
 
-        #[cfg(feature = "logging")]
-        log::debug!("2 - Tcf bit :{:?}\tCCR:{:x}\tCR:{:x}\tDCR:{:x}\tSR:{:x}", 
-            self.qspi.sr.read().tcf().bit_is_set(), 
-            self.qspi.ccr.read().bits(),
-            self.qspi.cr.read().bits(),
-            self.qspi.dcr.read().bits(),
-            self.qspi.sr.read().bits()
-        );
+        // #[cfg(feature = "logging")]
+        // log::debug!("2 - Tcf bit :{:?}\tCCR:{:x}\tCR:{:x}\tDCR:{:x}\tSR:{:x}", 
+        //     self.qspi.sr.read().tcf().bit_is_set(), 
+        //     self.qspi.ccr.read().bits(),
+        //     self.qspi.cr.read().bits(),
+        //     self.qspi.dcr.read().bits(),
+        //     self.qspi.sr.read().bits()
+        // );
 
         //Read data from the buffer
         let mut b = buffer.iter_mut();
@@ -380,28 +385,19 @@ impl <PINS> Qspi <PINS> {
         //When transfer complete, empty fifo buffer
         while self.qspi.sr.read().flevel().bits() > 0 {
             #[cfg(feature = "logging")]
-            log::debug!{"flevel not zero: {:?}", self.qspi.sr.read().flevel().bits()};
+            log::debug!{"FIFO level: {:?}", self.qspi.sr.read().flevel().bits()};
             if let Some(v) = b.next() {
+                unsafe{
+                    *v = ptr::read_volatile(&self.qspi.dr as *const _ as *const u8);
+                }
                 #[cfg(feature = "logging")]
-                log::debug!{"Recived: {:x}", self.qspi.dr.read().bits()};
-                // unsafe{
-                //     *v = ptr::read_volatile(&self.qspi.dr as *const _ as *const u8);
-                // }
-                // #[cfg(feature = "logging")]
-                // log::debug!{"Recived: {:x}", *v};
+                log::debug!{"Recived: {:x}", *v};
             } else {
                 #[cfg(feature = "logging")]
                 log::debug!{"OVERFLOW!"};
                 // OVERFLOW
             }
         }
-
-        // unsafe {
-        //     for location in buffer {
-        //         *location = ptr::read_volatile(&self.qspi.dr as *const _ as *const u8);
-        //     }
-        // }
-
         self.qspi.fcr.write(|w| w.ctcf().set_bit());        
     }
 /*
@@ -448,6 +444,7 @@ impl <PINS> Qspi <PINS> {
         Ok(())
     }
 */
+/*
     pub fn read(&mut self, addr: u8, dest: &mut [u8]) {
         if self.is_busy() {
             // return Err(QspiError::Busy);
@@ -517,6 +514,6 @@ impl <PINS> Qspi <PINS> {
 
         // Ok(());
     }
-
+*/
     
 }
