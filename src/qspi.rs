@@ -2,6 +2,8 @@
 
 use crate::stm32::QUADSPI;
 use crate::rcc::AHB3;
+use crate::gpio::gpioe::{PE10, PE11, PE12, PE13, PE14, PE15};
+use crate::gpio::{Alternate, Floating, Input, AF10};
 use core::ptr;
 
 
@@ -126,6 +128,17 @@ impl QspiConfig {
     }
 }
 
+pub trait Pins<QSPI>{
+
+}
+
+impl Pins<QUADSPI> for (
+    PE10<Alternate<AF10, Input<Floating>>>,
+    PE11<Alternate<AF10, Input<Floating>>>,
+    PE12<Alternate<AF10, Input<Floating>>>,
+    PE13<Alternate<AF10, Input<Floating>>>,
+    PE14<Alternate<AF10, Input<Floating>>>, 
+    PE15<Alternate<AF10, Input<Floating>>>){}
 
 pub struct QspiWriteCommand<'c>{
     pub instruction : Option<u8>,
@@ -144,13 +157,15 @@ pub struct QspiReadCommand<'c>{
 }
 
 
-pub struct Qspi {
+pub struct Qspi<PINS> {
     qspi: QUADSPI,
+    pins : PINS,
     config: QspiConfig,
 }
 
-impl Qspi {
-    pub fn new(qspi: QUADSPI, ahb3 : &mut AHB3, config : QspiConfig) -> Self {
+impl <PINS> Qspi <PINS> {
+    pub fn new(qspi: QUADSPI, pins : PINS, ahb3 : &mut AHB3, config : QspiConfig) -> Self 
+        where PINS :Pins<QUADSPI> {
         // Enable quad SPI in the clocks.
         ahb3.enr().modify(|_,w| w.qspien().bit(true));
 
@@ -168,7 +183,7 @@ impl Qspi {
             .ctef().set_bit()
         });
 
-        let mut unit = Qspi{qspi, config};
+        let mut unit = Qspi{qspi, pins, config};
         unit.apply_config(config);
         unit
     }
@@ -185,13 +200,6 @@ impl Qspi {
             log::debug!{"Busy..."};
         }
 
-        
-        self.qspi.dcr.write(|w| unsafe{
-            w.fsize().bits(config.flash_size as u8)
-            .csht().bits(config.chip_select_high_time as u8)
-            .ckmode().bit(config.clock_mode == ClockMode::Mode3)
-        });
-
         self.qspi.cr.modify(|_, w| unsafe {
                 w.fthres().bits(config.fifo_threshold as u8)
 
@@ -206,9 +214,20 @@ impl Qspi {
         self.qspi.cr.modify(|_, w| unsafe {
             w.prescaler().bits(config.clock_prescaler as u8)
                 .sshift().bit(config.sample_shift == SampleShift::HalfACycle)
-                .en().set_bit()
-
         });
+
+        //Modify DCR with flash size, CSHT and clock mode
+        self.qspi.dcr.modify(|_, w| unsafe{
+            w.fsize().bits(config.flash_size as u8)
+            .csht().bits(config.chip_select_high_time as u8)
+            .ckmode().bit(config.clock_mode == ClockMode::Mode3)
+        });
+
+        //Enable SPI
+        self.qspi.cr.modify(|_, w| unsafe {
+            w.en().set_bit()
+        });
+
         self.config = config;
     }
 
@@ -233,7 +252,11 @@ impl Qspi {
         // Write the length and format of data  
         if command.recive_lenght > 0 {
             self.qspi.dlr.write(|w| unsafe {w.dl().bits(command.recive_lenght as u32 - 1)});
-            dmode = self.config.qspi_mode as u8;
+            if self.config.qpi_mode{
+                dmode = self.config.qspi_mode as u8;
+            } else {
+                dmode = 0b01;
+            }
         }
        
         #[cfg(feature = "logging")]
@@ -291,8 +314,8 @@ impl Qspi {
             self.qspi.sr.read().bits()
         );
         
-        //Enable functional mode indirect read
-        self.qspi.ccr.write(|w|
+        //Write CCR register with instruction etc.
+        self.qspi.ccr.modify(|_, w|
             unsafe {
                 w.fmode().bits(0b01)
                     .admode().bits(admode)
@@ -301,8 +324,7 @@ impl Qspi {
                     .absize().bits(absize)
                     .ddrm().bit(self.config.double_data_rate)
                     .dcyc().bits(command.dummy_cycles)
-                    .dmode().bits(0b01)
-                    // .dmode().bits(dmode)
+                    .dmode().bits(dmode)
                     .imode().bits(imode)
                     .instruction().bits(instruction)
 
@@ -425,63 +447,76 @@ impl Qspi {
 
         Ok(())
     }
-
-    pub fn read(&mut self, addr: u8, dest: &mut [u8]) -> Result<(), QspiError> {
+*/
+    pub fn read(&mut self, addr: u8, dest: &mut [u8]) {
         if self.is_busy() {
-            return Err(QspiError::Busy);
+            // return Err(QspiError::Busy);
         }
 
         // Clear the transfer complete flag.
-        self.rb.fcr.modify(|_ ,w| w.ctcf().set_bit());
+        self.qspi.fcr.modify(|_ ,w| w.ctcf().set_bit());
 
         // Write the length that should be read.
-        self.rb.dlr.write(|w| unsafe {
+        self.qspi.dlr.write(|w| unsafe {
             w.dl().bits(dest.len() as u32 - 1)
         });
 
+        self.qspi.ccr.modify(|_, w|
+            unsafe {
+                    w.admode().bits(0)
+                    .adsize().bits(0)
+                    .abmode().bits(0)
+                    .absize().bits(0)
+                    .ddrm().bit(false)
+                    .dcyc().bits(0)
+                    .dmode().bits(0b01)
+                    // .dmode().bits(dmode)
+                    .imode().bits(01)
+            });
+
         // Configure the mode to indirect read and configure the instruction byte.
-        self.rb.ccr.modify(|_, w| unsafe {
+        self.qspi.ccr.modify(|_, w| unsafe {
             w.fmode().bits(0b01)
              .instruction().bits(addr)
         });
 
-        // Enable the transaction
-        self.rb.cr.modify(|_, w| {w.en().set_bit()});
+        // // Enable the transaction
+        // self.qspi.cr.modify(|_, w| {w.en().set_bit()});
 
-        // Write the instruction bits to force the read to start. This has to be done after the
-        // transaction is enabled to indicate to the peripheral that we are ready to start the
-        // transaction, even though these bits should already be set.
-        self.rb.ccr.modify(|_, w| unsafe {
-            w.instruction().bits(addr)
-        });
+        // // Write the instruction bits to force the read to start. This has to be done after the
+        // // transaction is enabled to indicate to the peripheral that we are ready to start the
+        // // transaction, even though these bits should already be set.
+        // self.qspi.ccr.modify(|_, w| unsafe {
+        //     w.instruction().bits(addr)
+        // });
 
         // Wait for the transaction to complete
-        while self.rb.sr.read().tcf().bit_is_clear() {}
+        while self.qspi.sr.read().tcf().bit_is_clear() {}
 
         // Check for underflow on the FIFO.
-        if (self.rb.sr.read().flevel().bits() as usize) < dest.len() {
-            return Err(QspiError::Underflow);
+        if (self.qspi.sr.read().flevel().bits() as usize) < dest.len() {
+            // return Err(QspiError::Underflow);
         }
 
         // Read data from the FIFO in a byte-wise manner.
         unsafe {
             for location in dest {
-                *location = ptr::read_volatile(&self.rb.dr as *const _ as *const u8);
+                *location = ptr::read_volatile(&self.qspi.dr as *const _ as *const u8);
             }
         }
 
         // Check that there is no more transaction pending.
         if self.is_busy() {
-            return Err(QspiError::FifoData);
+            // return Err(QspiError::FifoData);
         }
 
-        self.rb.cr.modify(|_, w| {w.en().clear_bit()});
+        self.qspi.cr.modify(|_, w| {w.en().clear_bit()});
 
         // Clear the transfer complete flag.
-        self.rb.fcr.modify(|_ ,w| w.ctcf().set_bit());
+        self.qspi.fcr.modify(|_ ,w| w.ctcf().set_bit());
 
-        Ok(())
+        // Ok(());
     }
-*/
+
     
 }
