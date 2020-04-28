@@ -133,6 +133,8 @@ impl Pins<QUADSPI> for (
     PE14<Alternate<AF10, Input<Floating>>>, 
     PE15<Alternate<AF10, Input<Floating>>>){}
 
+
+    
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct QspiWriteCommand<'c>{
     pub instruction : Option<(u8, QspiMode)>,
@@ -142,6 +144,7 @@ pub struct QspiWriteCommand<'c>{
     pub data: Option<(&'c[u8], QspiMode)>,
     pub double_data_rate: bool,
 }
+
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct QspiReadCommand<'c>{
@@ -153,6 +156,103 @@ pub struct QspiReadCommand<'c>{
     pub recive_lenght : u32,
     pub double_data_rate: bool,
 }
+
+impl <'c>QspiWriteCommand <'c>{
+    pub fn address(self, addr: u32, mode: QspiMode) -> Self {
+        QspiWriteCommand{
+            instruction : self.instruction,
+            address : Some((addr, mode)),
+            alternative_bytes : self.alternative_bytes,
+            dummy_cycles : self.dummy_cycles,
+            data : self.data,
+            double_data_rate : self.double_data_rate,
+        }
+    }
+
+    pub fn alternative_bytes(self, bytes: &'c[u8], mode: QspiMode) -> Self {
+        QspiWriteCommand{
+            instruction : self.instruction,
+            address : self.address,
+            alternative_bytes : Some((bytes, mode)),
+            dummy_cycles : self.dummy_cycles,
+            data : self.data,
+            double_data_rate : self.double_data_rate,
+        }
+    }
+
+    pub fn dummy_cycles(self, n: u8) -> Self {
+        QspiWriteCommand{
+            instruction : self.instruction,
+            address : self.address,
+            alternative_bytes : self.alternative_bytes,
+            dummy_cycles : n,
+            data : self.data,
+            double_data_rate : self.double_data_rate,
+        }
+    }
+
+    pub fn data(self, bytes: &'c[u8], mode: QspiMode) -> Self {
+        QspiWriteCommand{
+            instruction : self.instruction,
+            address : self.address,
+            alternative_bytes : self.alternative_bytes,
+            dummy_cycles : self.dummy_cycles,
+            data : Some((bytes, mode)),
+            double_data_rate : self.double_data_rate,
+        }
+    }
+}
+
+impl <'c>QspiReadCommand <'c>{
+    pub fn address(self, addr: u32, mode: QspiMode) -> Self {
+        QspiReadCommand{
+            instruction : self.instruction,
+            address : Some((addr, mode)),
+            alternative_bytes : self.alternative_bytes,
+            dummy_cycles : self.dummy_cycles,
+            data_mode : self.data_mode,
+            recive_lenght : self.recive_lenght,
+            double_data_rate : self.double_data_rate,
+        }
+    }
+
+    pub fn alternative_bytes(self, bytes: &'c[u8], mode: QspiMode) -> Self {
+        QspiReadCommand{
+            instruction : self.instruction,
+            address : self.address,
+            alternative_bytes : Some((bytes, mode)),
+            dummy_cycles : self.dummy_cycles,
+            data_mode : self.data_mode,
+            recive_lenght : self.recive_lenght,
+            double_data_rate : self.double_data_rate,
+        }
+    }
+
+    pub fn dummy_cycles(self, n: u8) -> Self {
+        QspiReadCommand{
+            instruction : self.instruction,
+            address : self.address,
+            alternative_bytes : self.alternative_bytes,
+            dummy_cycles : n,
+            data_mode : self.data_mode,
+            recive_lenght : self.recive_lenght,
+            double_data_rate : self.double_data_rate,
+        }
+    }
+
+    pub fn recive_lenght(self, length: u32) -> Self {
+        QspiReadCommand{
+            instruction : self.instruction,
+            address : self.address,
+            alternative_bytes : self.alternative_bytes,
+            dummy_cycles : self.dummy_cycles,
+            data_mode : self.data_mode,
+            recive_lenght : length,
+            double_data_rate : self.double_data_rate,
+        }
+    }
+}
+
 
 
 pub struct Qspi<PINS> {
@@ -226,9 +326,9 @@ impl <PINS> Qspi <PINS> {
         });
 
         //Enable SPI
-        self.qspi.cr.modify(|_, w| unsafe {
+        self.qspi.cr.modify(|_, w|
             w.en().set_bit()
-        });
+        );
 
         self.config = config;
     }
@@ -313,9 +413,9 @@ impl <PINS> Qspi <PINS> {
         }
 
         if command.double_data_rate {
-            self.qspi.cr.modify(|_, w| unsafe {
+            self.qspi.cr.modify(|_, w|
                 w.sshift().bit(false)
-            });
+            );
         }
         
         #[cfg(feature = "logging")]
@@ -408,9 +508,9 @@ impl <PINS> Qspi <PINS> {
         self.qspi.fcr.write(|w| w.ctcf().set_bit());
         
         if command.double_data_rate {
-            self.qspi.cr.modify(|_, w| unsafe {
+            self.qspi.cr.modify(|_, w|
                 w.sshift().bit(self.config.sample_shift == SampleShift::HalfACycle)
-            });
+            );
         }
     }
 
@@ -495,9 +595,9 @@ impl <PINS> Qspi <PINS> {
         }
 
         if command.double_data_rate {
-            self.qspi.cr.modify(|_, w| unsafe {
+            self.qspi.cr.modify(|_, w|
                 w.sshift().bit(false)
-            });
+            );
         }
 
         #[cfg(feature = "logging")]
@@ -567,9 +667,9 @@ impl <PINS> Qspi <PINS> {
         self.qspi.fcr.write(|w| w.ctcf().set_bit());
 
         if command.double_data_rate {
-            self.qspi.cr.modify(|_, w| unsafe {
+            self.qspi.cr.modify(|_, w|
                 w.sshift().bit(self.config.sample_shift == SampleShift::HalfACycle)
-            });
+            );
         }
     }
 
