@@ -7,6 +7,65 @@ use crate::gpio::{Alternate, Floating, Input, AF10};
 use core::ptr;
 
 
+#[doc(hidden)]
+mod private {
+    pub trait Sealed {}
+}
+
+/// CLK pin. This trait is sealed and cannot be implemented.
+pub trait ClkPin<QSPI>: private::Sealed {}
+/// nCS pin. This trait is sealed and cannot be implemented.
+pub trait nCSPin<QSPI>: private::Sealed {}
+/// IO0 pin. This trait is sealed and cannot be implemented.
+pub trait IO0Pin<QSPI>: private::Sealed {}
+/// IO1 pin. This trait is sealed and cannot be implemented.
+pub trait IO1Pin<QSPI>: private::Sealed {}
+/// IO2 pin. This trait is sealed and cannot be implemented.
+pub trait IO2Pin<QSPI>: private::Sealed {}
+/// IO3 pin. This trait is sealed and cannot be implemented.
+pub trait IO3Pin<QSPI>: private::Sealed {}
+
+macro_rules! pins {
+    ($qspi:ident, $af:ident, CLK: [$($clk:ident),*], nCS: [$($ncs:ident),*], 
+        IO0: [$($io0:ident),*], IO1: [$($io1:ident),*], IO2: [$($io2:ident),*],
+        IO3: [$($io3:ident),*]) => {
+        $(
+            impl private::Sealed for $clk<Alternate<$af, Input<Floating>>> {}
+            impl ClkPin<$qspi> for $clk<Alternate<$af, Input<Floating>>> {}
+        )*
+        $(
+            impl private::Sealed for $ncs<Alternate<$af, Input<Floating>>> {}
+            impl nCSPin<$qspi> for $ncs<Alternate<$af, Input<Floating>>> {}
+        )*
+        $(
+            impl private::Sealed for $io0<Alternate<$af, Input<Floating>>> {}
+            impl IO0Pin<$qspi> for $io0<Alternate<$af, Input<Floating>>> {}
+        )*
+        $(
+            impl private::Sealed for $io1<Alternate<$af, Input<Floating>>> {}
+            impl IO1Pin<$qspi> for $io1<Alternate<$af, Input<Floating>>> {}
+        )*
+        $(
+            impl private::Sealed for $io2<Alternate<$af, Input<Floating>>> {}
+            impl IO2Pin<$qspi> for $io2<Alternate<$af, Input<Floating>>> {}
+        )*
+        $(
+            impl private::Sealed for $io3<Alternate<$af, Input<Floating>>> {}
+            impl IO3Pin<$qspi> for $io3<Alternate<$af, Input<Floating>>> {}
+        )*
+    }
+}
+
+
+pins!(QUADSPI, AF10,
+    CLK: [PE10],
+    nCS: [PE11],
+    IO0: [PE12],
+    IO1: [PE13],
+    IO2: [PE14],
+    IO3: [PE15]);
+
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub enum QspiMode{
@@ -25,7 +84,6 @@ pub enum AddressSize{
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-// #[repr(bool)]
 pub enum SampleShift{
     None,
     HalfACycle,
@@ -134,7 +192,7 @@ impl Pins<QUADSPI> for (
     PE15<Alternate<AF10, Input<Floating>>>){}
 
 
-    
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct QspiWriteCommand<'c>{
     pub instruction : Option<(u8, QspiMode)>,
@@ -261,9 +319,21 @@ pub struct Qspi<PINS> {
     config: QspiConfig,
 }
 
-impl <PINS> Qspi <PINS> {
-    pub fn new(qspi: QUADSPI, pins : PINS, ahb3 : &mut AHB3, config : QspiConfig) -> Self 
-        where PINS :Pins<QUADSPI> {
+impl <CLK, NCS, IO0, IO1, IO2, IO3> Qspi <(CLK, NCS, IO0, IO1, IO2, IO3)> {
+    pub fn new(
+        qspi: QUADSPI, 
+        pins : (CLK, NCS, IO0, IO1, IO2, IO3), 
+        ahb3 : &mut AHB3, 
+        config : QspiConfig
+    ) -> Self 
+    where 
+        CLK: ClkPin<QUADSPI>,
+        NCS: nCSPin<QUADSPI>,
+        IO0: IO0Pin<QUADSPI>,
+        IO1: IO1Pin<QUADSPI>,
+        IO2: IO2Pin<QUADSPI>,
+        IO3: IO3Pin<QUADSPI>,
+    {
         // Enable quad SPI in the clocks.
         ahb3.enr().modify(|_,w| w.qspien().bit(true));
 
