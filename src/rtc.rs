@@ -8,10 +8,9 @@ use crate::stm32::{RTC};
 /// RTC Abstraction
 pub struct Rtc {
     rtc: RTC,
-<<<<<<< HEAD
     rtc_config : RtcConfig
 }
-
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub enum RtcClockSource {
     /// 00: No clock
@@ -79,7 +78,6 @@ impl Rtc {
         pwrcr1: &mut pwr::CR1,
         rtc_config: RtcConfig,
     ) -> Self {
->>>>>>> 4ea655a55626a5efbb248fcf0f24ae47ca17b590
         // assert_eq!(clocks.lsi(), true); // make sure LSI is enabled
         // enable peripheral clock for communication
         apb1r1.enr().modify(|_, w| w.rtcapben().set_bit());

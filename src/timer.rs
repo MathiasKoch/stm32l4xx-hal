@@ -1,7 +1,7 @@
 //! Timers
 
 use crate::hal::timer::{CountDown, Periodic};
-use crate::stm32::{TIM15, TIM16, TIM2, TIM6, TIM7};
+use crate::stm32::{TIM15, TIM16, TIM2, TIM5, TIM6, TIM7};
 use cast::{u16, u32};
 use nb;
 use void::Void;
@@ -134,6 +134,7 @@ macro_rules! hal {
 
 hal! {
     TIM2: (tim2, tim2en, tim2rst, APB1R1),
+    TIM5: (tim5, tim5en, tim4rst, APB1R1),
     TIM6: (tim6, tim6en, tim6rst, APB1R1),
     TIM7: (tim7, tim7en, tim7rst, APB1R1),
     TIM15: (tim15, tim15en, tim15rst, APB2),
