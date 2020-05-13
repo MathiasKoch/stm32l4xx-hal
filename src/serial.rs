@@ -112,6 +112,8 @@ pub enum Error {
     Overrun,
     /// Parity check error
     Parity,
+    /// Impossible baudrate
+    ImpossibleBaud,
     #[doc(hidden)]
     _Extensible,
 }
@@ -592,6 +594,8 @@ impl Default for Config {
 pub struct Serial<USART, PINS> {
     usart: USART,
     pins: PINS,
+    config: Config,
+    clockrate: Bps,
 }
 
 /// Serial receiver
@@ -743,7 +747,7 @@ macro_rules! hal {
                         .cr1
                         .modify(|_, w| w.ue().set_bit().re().set_bit().te().set_bit());
 
-                    Serial { usart, pins }
+                    Serial { usart, pins, config, clockrate: Bps(clocks.$pclkX().0) }
                 }
 
                 /// Starts listening for an interrupt event
@@ -803,6 +807,34 @@ macro_rules! hal {
                 /// Frees the USART peripheral
                 pub fn release(self) -> ($USARTX, PINS) {
                     (self.usart, self.pins)
+                }
+
+                pub fn set_baud_rate(&mut self, baudrate: Bps) -> Result<(), Error>{
+                    // Configure baud rate
+                    match self.config.oversampling {
+                        Oversampling::Over8 => {
+                            let uartdiv = 2 * self.clockrate.0 as i32 / baudrate.0 as i32;
+                            if uartdiv < 16 {
+                                return Err(Error::ImpossibleBaud)
+                            }
+
+                            let lower = (uartdiv & 0xf) >> 1;
+                            let brr = (uartdiv & !0xf) | lower;
+
+                            self.usart.cr1.modify(|_, w| w.over8().set_bit());
+                            self.usart.brr.write(|w| unsafe { w.bits(brr as u32) });
+                        }
+                        Oversampling::Over16 => {
+                            let brr = self.clockrate.0 as i32 / baudrate.0 as i32;
+                            if brr < 16 {
+                                return Err(Error::ImpossibleBaud)
+                            }
+
+                            self.usart.brr.write(|w| unsafe { w.bits(brr as u32) });
+                        }
+                    }
+                    self.config.baudrate = baudrate;
+                    Ok(())
                 }
             }
 
