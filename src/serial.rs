@@ -13,6 +13,7 @@ use generic_array::ArrayLength;
 use stable_deref_trait::StableDeref;
 
 use crate::hal::serial::{self, Write};
+use crate::traits::serial::ConfigureBaud;
 use nb;
 
 use crate::stm32::{USART1, USART2};
@@ -808,12 +809,17 @@ macro_rules! hal {
                 pub fn release(self) -> ($USARTX, PINS) {
                     (self.usart, self.pins)
                 }
+            }
 
-                pub fn set_baud_rate(&mut self, baudrate: Bps) -> Result<(), Error>{
+            impl<PINS> ConfigureBaud for Serial<$USARTX, PINS>{
+                type Error = self::Error;
+                type BaudRate = Bps;
+
+                fn set_baud_rate(&mut self, baud_rate: Self::BaudRate) -> Result<(), Error>{
                     // Configure baud rate
                     match self.config.oversampling {
                         Oversampling::Over8 => {
-                            let uartdiv = 2 * self.clockrate.0 as i32 / baudrate.0 as i32;
+                            let uartdiv = 2 * self.clockrate.0 as i32 / baud_rate.0 as i32;
                             if uartdiv < 16 {
                                 return Err(Error::ImpossibleBaud)
                             }
@@ -825,7 +831,7 @@ macro_rules! hal {
                             self.usart.brr.write(|w| unsafe { w.bits(brr as u32) });
                         }
                         Oversampling::Over16 => {
-                            let brr = self.clockrate.0 as i32 / baudrate.0 as i32;
+                            let brr = self.clockrate.0 as i32 / baud_rate.0 as i32;
                             if brr < 16 {
                                 return Err(Error::ImpossibleBaud)
                             }
@@ -833,7 +839,7 @@ macro_rules! hal {
                             self.usart.brr.write(|w| unsafe { w.bits(brr as u32) });
                         }
                     }
-                    self.config.baudrate = baudrate;
+                    self.config.baudrate = baud_rate;
                     Ok(())
                 }
             }
