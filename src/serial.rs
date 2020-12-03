@@ -1055,6 +1055,49 @@ macro_rules! hal {
                         false
                     }
                 }
+                /// Starts listening for an interrupt event related to reciver
+                pub fn listen(&mut self, event: Event) {
+                    let cr1 = unsafe { &(*$USARTX::ptr()).cr1 };
+                    match event {
+                        Event::Rxne => {
+                            cr1.modify(|_, w| w.rxneie().set_bit())
+                        },
+                        Event::Txe => {
+                            ()
+                        },
+                        Event::Idle => {
+                            cr1.modify(|_, w| w.idleie().set_bit())
+                        },
+                        Event::CharacterMatch => {
+                            cr1.modify(|_, w| w.cmie().set_bit())
+                        },
+                        Event::ReceiverTimeout => {
+                            cr1.modify(|_, w| w.rtoie().set_bit())
+                        },
+                    }
+                }
+
+                /// Stops listening for an interrupt event related to reciver
+                pub fn unlisten(&mut self, event: Event) {
+                    let cr1 = unsafe { &(*$USARTX::ptr()).cr1 };
+                    match event {
+                        Event::Rxne => {
+                            cr1.modify(|_, w| w.rxneie().clear_bit())
+                        },
+                        Event::Txe => {
+                            ()
+                        },
+                        Event::Idle => {
+                            cr1.modify(|_, w| w.idleie().clear_bit())
+                        },
+                        Event::CharacterMatch => {
+                            cr1.modify(|_, w| w.cmie().clear_bit())
+                        },
+                        Event::ReceiverTimeout => {
+                            cr1.modify(|_, w| w.rtoie().clear_bit())
+                        },
+                    }
+                }
             }
 
             impl Tx<$USARTX> {
@@ -1095,6 +1138,27 @@ macro_rules! hal {
                     });
 
                     FrameSender::new(channel)
+                }
+                /// Starts listening for an interrupt event
+                pub fn listen(&mut self, event: Event) {
+                    let cr1 = unsafe { &(*$USARTX::ptr()).cr1 };
+                    match event {
+                        Event::Txe => {
+                            cr1.modify(|_, w| w.txeie().set_bit());
+                        },
+                        _ => { },
+                    }
+                }
+
+                /// Stops listening for an interrupt event
+                pub fn unlisten(&mut self, event: Event) {
+                    let cr1 = unsafe { &(*$USARTX::ptr()).cr1 };
+                    match event {
+                        Event::Txe => {
+                            cr1.modify(|_, w| w.txeie().clear_bit())
+                        },
+                        _ => { },
+                    }
                 }
             }
         )+
